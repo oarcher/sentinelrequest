@@ -3,7 +3,8 @@
 scihub and peps requests from command line and python 
 
 ```
-% ./sentinelRequest.py --help
+% pip install git+https://gitlab.ifremer.fr/sarwing/sentinelrequest.git
+% sentinelRequest --help
 usage: sentinelRequest.py [-h] [--user USER] [--password PASSWORD]
                           [--date DATE] [--coord COORD] [--filename FILENAME]
                           [--query QUERY] [--datatake]

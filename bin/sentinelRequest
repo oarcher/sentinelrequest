@@ -1,0 +1,77 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+from __future__ import print_function
+import os,sys
+import datetime
+import logging
+import argparse
+
+from sentinelRequest import scihubQuery
+
+logging.basicConfig()
+logger = logging.getLogger(os.path.basename(__file__))
+logger.setLevel(logging.INFO)
+
+
+if __name__ == "__main__":
+    
+    
+    
+    dateformat="%Y-%m-%d %H:%M"
+    dtime=3
+    filename="S1*"
+    ddeg=0.1
+    
+    description = "Requests SAFE list from scihub"
+
+    parser = argparse.ArgumentParser(description = description)
+
+    parser.add_argument("--user",action="store",default=["guest"],nargs=1,type=str,help="scihub login")
+    parser.add_argument("--password",action="store",default=["guest"],nargs=1,type=str,help="scihub password")
+    parser.add_argument("--date",action="append",default=None, nargs=1,  type=str,help="date as string. if provided 2 time, first is start, last is stop")
+    parser.add_argument("--coord",action="append",default=None, nargs=1, type=str,help="lon,lat of center. if provided more times, a polygon is used")
+    parser.add_argument("--filename",action="store",default=[filename],nargs=1,type=str,help="filename, with joker. ex 'S1?_?W_GRD*'. default to %s" % filename)
+    parser.add_argument("--query",action="store",default=None,nargs=1,type=str,help="""additionnal query. for exemple 'orbitdirection:ASCENDING AND polarisationmode:"VV VH"'""")
+    parser.add_argument("--datatake",action="store_true",help="retrieve the whole datatake (ie adjacent SAFEs)")
+    parser.add_argument("--dateformat",action="store",default=[dateformat], nargs=1,  type=str,help="strftime date format. default: %%Y-%%m-%%d %%H:%%M" )
+    parser.add_argument("--dtime",action="store",default=[dtime],nargs=1,type=int,help="dtime in hours, if --date has only one date. default to %d" % dtime)
+    parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
+    parser.add_argument("--ql",action="store_true",help="download quicklook")
+    parser.add_argument("--debug",action="store_true",help="show debug messages")
+
+    args = parser.parse_args()
+    
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Activating debug messages")
+        import debug
+        try:
+            import debug
+        except:
+            pass
+    # cat /home/datawork-cersat-public/archive/provider/noaa/mirrors/ftp.emc.ncep.noaa.gov/wd20vxt/hwrf-init/decks/bal142018.dat |  awk '($9 + 0) > 64 {print $3"00 "$8" "$7}' | tr -d , | uniq | sed -r 's/([[:digit:]]+)([[:digit:]])N/\1.\2/' | sed -r 's/([[:digit:]]+)([[:digit:]])S/-\1.\2/' | sed -r 's/([[:digit:]]+)([[:digit:]])E/\1.\2/' | sed -r 's/([[:digit:]]+)([[:digit:]])W/-\1.\2/'
+    date = None
+    if args.date:
+        date=[ datetime.datetime.strptime(d[0],args.dateformat[0]) for d in args.date]
+    
+    
+    lon=[]
+    lat=[]
+    if args.coord:
+        for coord in args.coord:
+            strlon,strlat=coord[0].split(',')
+            lon.append(float(strlon))
+            lat.append(float(strlat))
+    
+    try:
+        query=args.query[0]
+    except:
+        query=None
+        
+    
+    
+    result=scihubQuery(date=date,lonlat=[lon,lat],ddeg=args.ddeg,dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0])
+    for safe in list(result.keys()):
+        print(safe)
+        #out=download_scihub(safe)
+    
