@@ -13,12 +13,13 @@ logger.setLevel(logging.INFO)
 
 urlapi='https://scihub.copernicus.eu/apihub/search'
 
-download_scihub_url={  # %s : uuid
-    "main" : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/$value",
-    "alt"  : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/",
-    "ql"   : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/Products('Quicklook')/$value"
-    }
+#download_scihub_url={  # %s : uuid
+#    "main" : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/$value",
+#    "alt"  : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/",
+#    "ql"   : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/Products('Quicklook')/$value"
+#    }
 
+# remove_dom
 xslt='''<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
 <xsl:output method="xml" indent="no"/>
 
@@ -45,7 +46,7 @@ xslt='''<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Tran
 remove_dom=etree.XSLT(etree.fromstring(xslt))
 
 
-def download_scihub(filename,user='oarcher', password='nliqt6u3'):
+def download_scihub(filename,user='guest', password='guest'):
     safe=scihubQuery(filename=filename, user=user, password=password)
     urldl=download_scihub_url['ql'] % safe[filename]['uuid']
     # todo : use wget for downloads
@@ -64,9 +65,10 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
     """
     
     q=[]
-    
+    dateformat="%Y-%m-%dT%H:%M:%S.%fZ"
     footprint=""
     datePosition=""
+    
     
     try:
         roi=define_POLYGON(lonlat[0], lonlat[1],ddeg=ddeg)
@@ -83,11 +85,11 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         except:
             date=[date]
         if len(date) == 2:
-            startdate=date[0].strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            stopdate=date[1].strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            startdate=date[0].strftime(dateformat)
+            stopdate=date[1].strftime(dateformat)
         else:
-            startdate=(date[0]-dtime).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            stopdate=(date[0]+dtime).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            startdate=(date[0]-dtime).strftime(dateformat)
+            stopdate=(date[0]+dtime).strftime(dateformat)
             
         datePosition="(beginPosition:[%s TO %s] OR endPosition:[%s TO %s])" % (startdate , stopdate , startdate, stopdate)
         q.append(datePosition)
@@ -125,23 +127,50 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         
         if len(root.findall(".//entry")) > 0:
             for entry in root.findall(".//entry"):
-                filename=entry.find("str[@name = 'filename']").text
+                #filename=entry.find("str[@name = 'filename']").text
                 safe={}
-                for strelt in ['footprint','orbitdirection','polarisationmode','uuid','status']:
-                    safe[strelt]=entry.find("str[@name = '%s']" % strelt).text
-                safes["%s" % filename] = safe
+                
+                # get all str objects
+                for str_entry in entry.findall("str"):
+                    safe[str_entry.attrib['name']]=str_entry.text
+                # get all int objects
+                for int_entry in entry.findall("int"):
+                    safe[int_entry.attrib['name']]=int(int_entry.text)
+                # get all date objects
+                for date_entry in entry.findall("date"):
+                    safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text,dateformat)
+                    
+                for link in entry.findall("link"):
+                    url_name='url'
+                    if 'rel' in link.attrib:
+                        url_name="%s_%s" % (url_name, link.attrib['rel'])
+                    safe[url_name]=link.attrib['href']
+                #safes["%s" % filename] = safe
+                
+                # append to safes
+                for field in safe:
+                    if field not in safes:
+                        safes[field]=[]
+                    safes[field].append(safe[field])
+                    
+                
                 start+=1
         else:
             start=-1
         
     if datatake:
         logger.debug("Asking for same datatakes")
-        for safe in list(safes.keys()):
+        for safe in list(safes['filename']):
             takeid=safe.split('_')[-2]
             safe_rad="_".join(safe.split('_')[0:4])
             safes_datatake=scihubQuery(filename='%s_*_*_*_%s_*' % (safe_rad, takeid),user=user,password=password)
-            for safe_datatake,value in safes_datatake.items():
-                safes[safe_datatake]=value
+            idup=safes_datatake['filename'].index(safe)
+            for field in safes_datatake:
+                del safes_datatake[field][idup]
+                safes[field]+=safes_datatake[field]
+                
+            #for safe_datatake,value in safes_datatake.items():
+            #    safes[safe_datatake]=value
         
 
     return safes

@@ -71,7 +71,7 @@ if __name__ == "__main__":
     
     
     result=scihubQuery(date=date,lonlat=[lon,lat],ddeg=args.ddeg,dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0])
-    for safe in list(result.keys()):
+    for safe in list(result['filename']):
         print(safe)
         #out=download_scihub(safe)
     
