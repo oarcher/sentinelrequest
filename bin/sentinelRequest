@@ -6,11 +6,12 @@ import datetime
 import logging
 import argparse
 
-from sentinelRequest import scihubQuery
+from sentinelRequest import scihubQuery,logger
 
-logging.basicConfig()
-logger = logging.getLogger(os.path.basename(__file__))
-logger.setLevel(logging.INFO)
+
+#logging.basicConfig()
+#logger = logging.getLogger(os.path.basename(__file__))
+#logger.setLevel(logging.INFO)
 
 
 if __name__ == "__main__":
@@ -38,6 +39,8 @@ if __name__ == "__main__":
     parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
     parser.add_argument("--ql",action="store_true",help="download quicklook")
     parser.add_argument("--debug",action="store_true",help="show debug messages")
+    parser.add_argument("--show",action="store_true",help="show map with matplotlib")
+    
 
     args = parser.parse_args()
     
@@ -54,14 +57,11 @@ if __name__ == "__main__":
     if args.date:
         date=[ datetime.datetime.strptime(d[0],args.dateformat[0]) for d in args.date]
     
-    
-    lon=[]
-    lat=[]
+    lonlat=[]
     if args.coord:
         for coord in args.coord:
             strlon,strlat=coord[0].split(',')
-            lon.append(float(strlon))
-            lat.append(float(strlat))
+            lonlat.append((float(strlon),float(strlat)))
     
     try:
         query=args.query[0]
@@ -70,7 +70,7 @@ if __name__ == "__main__":
         
     
     
-    result=scihubQuery(date=date,lonlat=[lon,lat],ddeg=args.ddeg,dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0])
+    result=scihubQuery(date=date,lonlat=lonlat,ddeg=args.ddeg,dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0],show=args.show)
     for safe in list(result['filename']):
         print(safe)
         #out=download_scihub(safe)
