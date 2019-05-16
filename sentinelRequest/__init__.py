@@ -7,7 +7,7 @@ from lxml import etree
 import logging
 
 logging.basicConfig()
-logger = logging.getLogger(os.path.basename(__file__))
+logger = logging.getLogger("sentinelRequest")
 logger.setLevel(logging.INFO)
 
 
@@ -55,29 +55,20 @@ def download_scihub(filename,user='guest', password='guest'):
     return xmlout
 
 
-def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.1 ,filename='S1*', datatake=False, query=None, user='guest', password='guest'):
+def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.1 ,filename='S1*', datatake=False, query=None, user='guest', password='guest', show=False):
     """
     query='(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
     input:
         date: [ start, stop ] 
-        if [ date ], dtime will be used to compute start ans stop
-        lonlat : [ lon, lat ] or [[lon],[lat]]
+        if [ date ], dtime will be used to compute start and stop
+        lonlat : ( lon, lat ) or [(lon1,lat1),(lon2,lat2),...] or shapely object
     """
     
     q=[]
     dateformat="%Y-%m-%dT%H:%M:%S.%fZ"
+    dateformat_alt="%Y-%m-%dT%H:%M:%S"
     footprint=""
     datePosition=""
-    
-    
-    try:
-        roi=define_POLYGON(lonlat[0], lonlat[1],ddeg=ddeg)
-        footprint=" OR ".join(['(footprint:\"Intersects(POLYGON((%s)))\" )' % poly for poly in roi])
-        footprint="(%s)" % footprint
-        q.append(footprint)
-    except:
-        logger.debug("not using lon/lat selection")
-        pass
         
     if date:
         try:
@@ -98,6 +89,22 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
     
     if query:
         q.append("(%s)" % query)
+    
+    if lonlat:
+        if not hasattr(lonlat,'to_wkt'):
+            from shapely.geometry import Polygon,Point
+            try:
+                shape=Polygon(lonlat)
+            except (TypeError,ValueError):
+                shape=Point(lonlat)
+        else:
+            shape=lonlat
+            
+        wkt_shape=shape.to_wkt().replace("POINT","")
+        
+        footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
+        q.append(footprint)
+    
     
     str_query = ' AND '.join(q)
     
@@ -138,7 +145,10 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
                     safe[int_entry.attrib['name']]=int(int_entry.text)
                 # get all date objects
                 for date_entry in entry.findall("date"):
-                    safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text,dateformat)
+                    try:
+                        safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text,dateformat)
+                    except ValueError:
+                        safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text[0:19],dateformat_alt)
                     
                 for link in entry.findall("link"):
                     url_name='url'
@@ -148,11 +158,17 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
                 #safes["%s" % filename] = safe
                 
                 # append to safes
-                for field in safe:
-                    if field not in safes:
-                        safes[field]=[]
-                    safes[field].append(safe[field])
-                    
+                if not safes:
+                    safes=safe.copy()
+                    for field in safes:
+                        safes[field]=[safes[field]]
+                else:
+                    for field in safes:
+                        if field not in safe:
+                            val=None
+                        else:
+                            val=safe[field]
+                        safes[field].append(val)
                 
                 start+=1
         else:
@@ -171,45 +187,31 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
                 
             #for safe_datatake,value in safes_datatake.items():
             #    safes[safe_datatake]=value
+            
+    if not safes:
+        logger.warning("No results from scihub. Will return empty dict")
+        
+    if show:
+        import pandas as pd
+        import geopandas as gpd
+        import matplotlib.pyplot as plt
+        from shapely import wkt
+        map = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).plot(color='white', edgecolor='black')
+        
+        if lonlat is not None:
+            gdf_sel=gpd.GeoDataFrame({'geometry':[shape]})
+            map = gdf_sel.plot(ax=map,color='red',alpha=0.3)
+        
+        if safes:
+            df=pd.DataFrame(safes)
+            df['footprint'] = df['footprint'].apply(wkt.loads)
+            gdf=gpd.GeoDataFrame(df,geometry='footprint')
+            gdf.plot(ax=map,color='blue')
+        plt.show()
         
 
     return safes
 
-def define_POLYGON(lon,lat,ddeg=4.0):
-    lat_min = np.min(lat) - ddeg
-    if lat_min < -90.:
-        lat_min = -90.
-    lat_max = np.max(lat) + ddeg
-    if lat_max > 90.:
-        lat_max = 90.
-    lon = np.mod(np.array(lon)+360.,360.)
-    lon_min = np.min(lon) - ddeg
-    lon_max = np.max(lon) + ddeg  
-    if lon_max > 180.:
-        lon_max = lon_max - 360.
-    if lon_min > 180.:
-        lon_min = lon_min - 360.
-    POLYGON_l = []
-    if (lon_min > 0. and lon_min < 180. and lon_max < 0.):
-        POLYGON0 = "%04.2f"%lon_min+' '+ "%04.2f"%lat_min +', '+\
-                "%04.2f"%180.0+' '+ "%04.2f"%lat_min +', '+\
-                "%04.2f"%180.0+' '+ "%04.2f"%lat_max +', '+\
-                "%04.2f"%lon_min+' '+ "%04.2f"%lat_max +', '+\
-                "%04.2f"%lon_min+' '+ "%04.2f"%lat_min
-        POLYGON_l.append(POLYGON0)
-        POLYGON1 = "%04.2f"%-180.0+' '+ "%04.2f"%lat_min +', '+\
-                "%04.2f"%lon_max+' '+ "%04.2f"%lat_min +', '+\
-                "%04.2f"%lon_max+' '+ "%04.2f"%lat_max +', '+\
-                "%04.2f"%-180.0+' '+ "%04.2f"%lat_max +', '+\
-                "%04.2f"%-180.0+' '+ "%04.2f"%lat_min
-        POLYGON_l.append(POLYGON1)
-    else:
-        POLYGON = "%04.2f"%lon_min+' '+ "%04.2f"%lat_min +', '+\
-                    "%04.2f"%lon_max+' '+ "%04.2f"%lat_min +', '+\
-                    "%04.2f"%lon_max+' '+ "%04.2f"%lat_max +', '+\
-                    "%04.2f"%lon_min+' '+ "%04.2f"%lat_max +', '+\
-                    "%04.2f"%lon_min+' '+ "%04.2f"%lat_min
-        POLYGON_l.append(POLYGON)
-    return POLYGON_l
+
        
 
