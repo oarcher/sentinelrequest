@@ -112,7 +112,8 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
     
     safes={}
     start=0
-    while start >= 0:
+    count=1 # arbitrary count > start
+    while start < count:
         xmlout=requests.get(urlapi,auth=(user,password),params={"start":start,"rows":100,"q":str_query})
         
         try:
@@ -129,7 +130,10 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
             logger.critical("answer is: \n %s" % content)
             return {}
         
-        logger.debug("%s" % root.findall(".//subtitle")[0].text )
+        #<opensearch:totalResults>442</opensearch:totalResults>\n
+        count=int(root.find(".//totalResults").text)
+        #logger.debug("totalResults : %s" % root.find(".//totalResults").text )
+        logger.debug("%s" % root.find(".//subtitle").text )
         #logger.debug("got %d entry starting at %d" % (len(root.findall(".//entry")),start))
         
         if len(root.findall(".//entry")) > 0:
@@ -171,8 +175,8 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
                         safes[field].append(val)
                 
                 start+=1
-        else:
-            start=-1
+        #else:
+        #    start=-1
         
     if datatake:
         logger.debug("Asking for same datatakes")
