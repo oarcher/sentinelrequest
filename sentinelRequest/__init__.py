@@ -101,7 +101,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
             shape=lonlat.exterior.convex_hull.simplify(0.1, preserve_topology=False)
         
         from shapely.wkt import dumps
-        wkt_shape=dumps(shape,rounding_precision=1).replace("POINT","")
+        wkt_shape=dumps(shape,rounding_precision=1) # .replace("POINT","")
         
         footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
         q.append(footprint)
