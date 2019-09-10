@@ -55,7 +55,7 @@ def download_scihub(filename,user='guest', password='guest'):
     return xmlout
 
 
-def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.1 ,filename='S1*', datatake=False, query=None, user='guest', password='guest', show=False):
+def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, query=None, user='guest', password='guest', show=False):
     """
     query='(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
     input:
@@ -100,8 +100,11 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         else:
             shape=lonlat.exterior.convex_hull.simplify(0.1, preserve_topology=False)
         
+        if ddeg > 0.0:
+            shape=shape.buffer(ddeg,resolution=2)
+        
         from shapely.wkt import dumps
-        wkt_shape=dumps(shape,rounding_precision=1) # .replace("POINT","")
+        wkt_shape=dumps(shape,rounding_precision=2) # .replace("POINT","")
         
         footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
         q.append(footprint)
