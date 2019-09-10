@@ -55,13 +55,15 @@ def download_scihub(filename,user='guest', password='guest'):
     return xmlout
 
 
-def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, query=None, user='guest', password='guest', show=False):
+def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, duplicate=False, query=None, user='guest', password='guest', show=False):
     """
     query='(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
     input:
         date: [ start, stop ] 
         if [ date ], dtime will be used to compute start and stop
         lonlat : ( lon, lat ) or [(lon1,lat1),(lon2,lat2),...] or shapely object
+        duplicate : if True, will return safes with same prodid
+        ddeg : float rounding precision in deg
     """
     
     q=[]
@@ -195,9 +197,28 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
                 
             #for safe_datatake,value in safes_datatake.items():
             #    safes[safe_datatake]=value
-            
+    if safes and not duplicate:
+        # remove duplicate safes
+        filenames=safes['filename']
+        filenames_radic=[f[0:62] for f in filenames]
+        toremove_ind=[] # index list to delete
+        for filename_radic in filenames_radic:
+            if filenames_radic.count(filename_radic) > 1:
+                dup_ind=[i for i,val in enumerate(filenames_radic) if val==filename_radic]
+                for i in dup_ind:
+                    logger.debug("duplicate prodid : %s" % (safes['filename'][i]))
+                
+                # keep fist ingested SAFE
+                keep_ind=safes['ingestiondate'].index(min([ safes['ingestiondate'][i] for i in dup_ind ]))
+                del_ind=list(dup_ind)
+                del_ind.remove(keep_ind)
+                toremove_ind=toremove_ind+del_ind
+        for f in safes.keys():
+            for d in reversed(list(set(toremove_ind))):
+                del safes[f][d]
+                
     if not safes:
-        logger.warning("No results from scihub. Will return empty dict")
+        logger.debug("No results from scihub. Will return empty dict")
         
     if show:
         import pandas as pd
