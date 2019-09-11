@@ -1,10 +1,11 @@
 from __future__ import print_function
 import os,sys
-import numpy as np
+#import numpy as np
 import datetime
 import requests
 from lxml import etree
 import logging
+from __builtin__ import True
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -43,6 +44,8 @@ xslt='''<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Tran
 </xsl:stylesheet>
 '''
 
+
+
 remove_dom=etree.XSLT(etree.fromstring(xslt))
 
 
@@ -54,6 +57,51 @@ def download_scihub(filename,user='guest', password='guest'):
     
     return xmlout
 
+def deg180_(deg):
+    """ deg to -180 180 """
+    
+    print("deg in : %s" % (deg))
+    scalar=False
+    if not hasattr(deg, '__iter__'):
+        deg=tuple([deg])
+        scalar=True
+    deg=list(deg)
+    for i,d in enumerate(deg):
+        if d > 180 or d < -180:
+            d = d % 360
+            if d > 180:
+                d=d-360
+        deg[i]=d
+    deg=tuple(deg)
+    if scalar:
+        deg=deg[0]
+    print("deg out : %s" % (deg))
+    return deg
+
+def shape180(lon,lat):
+    """shapely shape to -180 180 (for shapely.ops.transform)"""
+    lon = lon % 360
+    lon = lon - 360 if lon > 180 else lon
+    return tuple([lon ,lat])
+
+def split_boundaries(shape):
+    """
+    A map is a plane representation of a sphere, so a shape can be outside the map, but on the sphere. 
+    ie lon=-181 is outside the map -180 -> 180 
+    split_boundaries return a polygon collection from a polygon that are all on the map
+    """
+    from shapely.wkt import loads
+    from shapely.ops import transform
+    from shapely.geometry import MultiPolygon
+    plan_map=loads("POLYGON ((-180 -90, -180 90, 180 90, 180 -90, -180 -90))")
+    if shape.overlaps(plan_map):
+        logger.debug("shape %s is outside the map" % shape)
+        shape_in=shape.intersection(plan_map)
+        shape_out=shape.difference(plan_map)
+        shape_out=transform(shape180, shape_out)
+        shape=MultiPolygon([shape_in,shape_out])
+    return shape
+    
 
 def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, duplicate=False, query=None, user='guest', password='guest', show=False):
     """
@@ -104,6 +152,8 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         
         if ddeg > 0.0:
             shape=shape.buffer(ddeg,resolution=2)
+            
+        shape=split_boundaries(shape)
         
         from shapely.wkt import dumps
         wkt_shape=dumps(shape,rounding_precision=2) # .replace("POINT","")
