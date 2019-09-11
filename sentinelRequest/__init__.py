@@ -1,11 +1,9 @@
 from __future__ import print_function
 import os,sys
-#import numpy as np
 import datetime
 import requests
 from lxml import etree
 import logging
-from __builtin__ import True
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -56,27 +54,6 @@ def download_scihub(filename,user='guest', password='guest'):
     xmlout=requests.get(urldl,auth=(user,password))
     
     return xmlout
-
-def deg180_(deg):
-    """ deg to -180 180 """
-    
-    print("deg in : %s" % (deg))
-    scalar=False
-    if not hasattr(deg, '__iter__'):
-        deg=tuple([deg])
-        scalar=True
-    deg=list(deg)
-    for i,d in enumerate(deg):
-        if d > 180 or d < -180:
-            d = d % 360
-            if d > 180:
-                d=d-360
-        deg[i]=d
-    deg=tuple(deg)
-    if scalar:
-        deg=deg[0]
-    print("deg out : %s" % (deg))
-    return deg
 
 def shape180(lon,lat):
     """shapely shape to -180 180 (for shapely.ops.transform)"""
