@@ -4,6 +4,9 @@ import datetime
 import requests
 from lxml import etree
 import logging
+from collections import OrderedDict
+import hashlib
+from io import StringIO
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -80,7 +83,7 @@ def split_boundaries(shape):
     return shape
     
 
-def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, duplicate=False, query=None, user='guest', password='guest', show=False):
+def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, duplicate=False, query=None, user='guest', password='guest', show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
     query='(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
     input:
@@ -89,6 +92,9 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         lonlat : ( lon, lat ) or [(lon1,lat1),(lon2,lat2),...] or shapely object
         duplicate : if True, will return safes with same prodid
         ddeg : float rounding precision in deg
+        cachedir : cache requests for speed up
+        cacherefreshrecent : timedelta from now. if requested date is recent, will refresh the cache to let scihub ingest new data
+        
     """
     
     q=[]
@@ -96,6 +102,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
     dateformat_alt="%Y-%m-%dT%H:%M:%S"
     footprint=""
     datePosition=""
+    dateage = None
         
     if date:
         try:
@@ -105,11 +112,14 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         if len(date) == 2:
             startdate=date[0].strftime(dateformat)
             stopdate=date[1].strftime(dateformat)
+            dateage=(datetime.datetime.utcnow() - date[1])
         else:
             startdate=(date[0]-dtime).strftime(dateformat)
             stopdate=(date[0]+dtime).strftime(dateformat)
+            dateage=(datetime.datetime.utcnow() - date[0])
             
-        datePosition="(beginPosition:[%s TO %s] OR endPosition:[%s TO %s])" % (startdate , stopdate , startdate, stopdate)
+        #datePosition="(beginPosition:[%s TO %s] OR endPosition:[%s TO %s])" % (startdate , stopdate , startdate, stopdate)
+        datePosition="beginPosition:[%s TO %s]" % (startdate , stopdate ) # shorter request . endPosition is just few seconds in future
         q.append(datePosition)
         
     q.append("filename:%s" % filename)
@@ -150,21 +160,56 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
     start=0
     count=1 # arbitrary count > start
     while start < count:
-        xmlout=requests.get(urlapi,auth=(user,password),params={"start":start,"rows":100,"q":str_query})
+        params=OrderedDict([("start" ,start ), ("rows", 100), ("q",str_query)])
+        root=None
+        cachefile=None
+        if cachedir is not None:
+            md5request=hashlib.md5("%s" % params).hexdigest()
+            cachefile=os.path.join(cachedir,md5request)
+            if os.path.exists(cachefile):
+                if dateage is not None and dateage > cacherefreshrecent:
+                    logger.debug("reading from cachefile %s" % cachefile)
+                    try:
+                        with open(cachefile, 'a'):
+                            os.utime(cachefile, None)
+                    except Exception as e:
+                        logger.warning('unable to touch %s : %s' % (cachefile , str(e) ) )
+                        
+                    try:
+                        root = remove_dom(etree.parse(cachefile))
+                    except:
+                        logger.warning('removing invalid cachefile %s' % cachefile)
+                        os.unlink(cachefile)
+                        root=None
+                else:
+                    logger.info('too recent request. Ignoring cachefile %s' % cachefile)
         
-        try:
-            root = remove_dom(etree.fromstring(xmlout.content))
-        except:
+        if root is None:
+            # request not cached
+            xmlout=requests.get(urlapi,auth=(user,password),params=params)
+        
             try:
-                import html2text
-                content=html2text.html2text(str(xmlout.content))
+                root = remove_dom(etree.fromstring(xmlout.content))
             except:
-                logger.info("html2text not found. dumping raw html")
-                content=xmlout.content
-            logger.critical("Error while parsing xml answer")
-            logger.critical("query was: %s" % str_query )
-            logger.critical("answer is: \n %s" % content)
-            return {}
+                try:
+                    import html2text
+                    content=html2text.html2text(str(xmlout.content))
+                except:
+                    logger.info("html2text not found. dumping raw html")
+                    content=xmlout.content
+                logger.critical("Error while parsing xml answer")
+                logger.critical("query was: %s" % str_query )
+                logger.critical("answer is: \n %s" % content)
+                raise ValueError('scihub query error')
+            
+            if cachefile is not None:
+                try:
+                    with open(cachefile,'w') as f:
+                        f.write(etree.tostring(root, pretty_print=True))
+                except:
+                    logger.warning('unable to write cachefile %s' % cachefile)
+                
+            
         
         #<opensearch:totalResults>442</opensearch:totalResults>\n
         count=int(root.find(".//totalResults").text)

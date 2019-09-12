@@ -38,6 +38,8 @@ if __name__ == "__main__":
     parser.add_argument("--dtime",action="store",default=[dtime],nargs=1,type=int,help="dtime in hours, if --date has only one date. default to %d" % dtime)
     parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
     parser.add_argument("--ql",action="store_true",help="download quicklook")
+    parser.add_argument("--cachedir",action="store",default=[None],nargs=1,help="cache dir to speedup requests")
+    parser.add_argument("--cacherefreshrecent",action="store",default=[7],type=int,nargs=1,help="ignore cache if date is more recent than n days ago")
     parser.add_argument("--debug",action="store_true",help="show debug messages")
     parser.add_argument("--show",action="store_true",help="show map with matplotlib")
     
@@ -70,7 +72,7 @@ if __name__ == "__main__":
         
     
     
-    result=scihubQuery(date=date,lonlat=lonlat,ddeg=args.ddeg[0],dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0],show=args.show)
+    result=scihubQuery(date=date,lonlat=lonlat,ddeg=args.ddeg[0],dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0],show=args.show,cachedir=args.cachedir[0],cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent[0]))
     if len(result) > 0:
         for safe in list(result['filename']):
             print(safe)
