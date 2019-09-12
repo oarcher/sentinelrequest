@@ -60,9 +60,19 @@ def download_scihub(filename,user='guest', password='guest'):
 
 def shape180(lon,lat):
     """shapely shape to -180 180 (for shapely.ops.transform)"""
-    lon = lon % 360
-    lon = lon - 360 if lon > 180 else lon
-    return tuple([lon ,lat])
+    import numpy as np
+    orig_type=type(lon)
+    
+    lon = np.array(lon) % 360 
+    change = lon>180
+    
+    lon[change]=lon[change]-360
+
+    # check if 180 should be changed to -180
+    if np.sum(lon[lon != 180.0]) <0:
+        lon[lon == 180.0] = -180.0
+
+    return tuple([(orig_type)(lon) ,lat])
 
 def split_boundaries(shape):
     """
@@ -79,6 +89,9 @@ def split_boundaries(shape):
         shape_in=shape.intersection(plan_map)
         shape_out=shape.difference(plan_map)
         shape_out=transform(shape180, shape_out)
+        import numpy as np
+        if np.std(np.array(shape_out.exterior.xy[0])) > 10:
+            logger.debug('possible pb')
         shape=MultiPolygon([shape_in,shape_out])
     return shape
     
@@ -102,7 +115,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
     dateformat_alt="%Y-%m-%dT%H:%M:%S"
     footprint=""
     datePosition=""
-    dateage = None
+    dateage = datetime.timedelta(weeks=100000) # old date age  per default too allow caching if no dates provided
         
     if date:
         try:
@@ -167,7 +180,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
             md5request=hashlib.md5("%s" % params).hexdigest()
             cachefile=os.path.join(cachedir,md5request)
             if os.path.exists(cachefile):
-                if dateage is not None and dateage > cacherefreshrecent:
+                if dateage > cacherefreshrecent:
                     logger.debug("reading from cachefile %s" % cachefile)
                     try:
                         with open(cachefile, 'a'):
@@ -182,7 +195,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
                         os.unlink(cachefile)
                         root=None
                 else:
-                    logger.info('too recent request. Ignoring cachefile %s' % cachefile)
+                    logger.info('too recent request (%s). Ignoring cachefile %s' % (dateage,cachefile))
         
         if root is None:
             # request not cached
@@ -212,7 +225,16 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
             
         
         #<opensearch:totalResults>442</opensearch:totalResults>\n
-        count=int(root.find(".//totalResults").text)
+        try:
+            count=int(root.find(".//totalResults").text)
+        except:
+            # there was an error in request
+            if cachefile is not None:
+                os.unlink(cachefile)
+            
+            raise ValueError("invalid request : %s" % str_query)
+            
+                
         #logger.debug("totalResults : %s" % root.find(".//totalResults").text )
         logger.debug("%s" % root.find(".//subtitle").text )
         #logger.debug("got %d entry starting at %d" % (len(root.findall(".//entry")),start))
