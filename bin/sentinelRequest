@@ -70,8 +70,9 @@ if __name__ == "__main__":
         
     
     
-    result=scihubQuery(date=date,lonlat=lonlat,ddeg=args.ddeg,dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0],show=args.show)
-    for safe in list(result['filename']):
-        print(safe)
-        #out=download_scihub(safe)
+    result=scihubQuery(date=date,lonlat=lonlat,ddeg=args.ddeg[0],dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0],show=args.show)
+    if len(result) > 0:
+        for safe in list(result['filename']):
+            print(safe)
+            #out=download_scihub(safe)
     

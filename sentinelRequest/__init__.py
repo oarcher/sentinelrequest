@@ -248,24 +248,35 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
                 del safes[f][d]
                 
     if not safes:
-        logger.debug("No results from scihub. Will return empty dict")
+        logger.debug("No results from scihub. Will return empty.")
+        
+    try:
+        import pandas as pd
+        safes=pd.DataFrame(safes)
+        try:
+            import geopandas as gpd
+            from shapely import wkt
+            if 'footprint' in safes:
+                safes['footprint'] = safes['footprint'].apply(wkt.loads)
+                safes=gpd.GeoDataFrame(safes,geometry='footprint')
+            else:
+                safes=gpd.GeoDataFrame(safes)
+        except Exception as e:
+            logger.warning('shapely or geopandas not found, returning a dataframe : %s' % str(e))
+            
+    except Exception as e:
+        logger.warning('pandas not found, returning a dict :%s ' % str(e))
         
     if show:
-        import pandas as pd
-        import geopandas as gpd
         import matplotlib.pyplot as plt
-        from shapely import wkt
         map = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).plot(color='white', edgecolor='black')
         
         if lonlat is not None:
             gdf_sel=gpd.GeoDataFrame({'geometry':[shape]})
             map = gdf_sel.plot(ax=map,color='red',alpha=0.3)
         
-        if safes:
-            df=pd.DataFrame(safes)
-            df['footprint'] = df['footprint'].apply(wkt.loads)
-            gdf=gpd.GeoDataFrame(df,geometry='footprint')
-            gdf.plot(ax=map,color='blue')
+        if len(safes) > 0:
+            safes.plot(ax=map,color='blue')
         plt.show()
         
 
