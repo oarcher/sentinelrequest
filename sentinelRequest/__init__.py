@@ -125,7 +125,10 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
             except (TypeError,ValueError):
                 shape=Point(lonlat)
         else:
-            shape=lonlat.exterior.convex_hull.simplify(0.1, preserve_topology=False)
+            shape=lonlat
+        # disable simplification (up to the caller to do so)
+        #else:
+        #    shape=lonlat.exterior.convex_hull.simplify(0.1, preserve_topology=False)
         
         if ddeg > 0.0:
             shape=shape.buffer(ddeg,resolution=2)
