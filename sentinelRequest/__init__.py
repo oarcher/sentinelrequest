@@ -10,8 +10,14 @@ from io import StringIO
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
-logger.setLevel(logging.INFO)
+if sys.gettrace():
+    logger.setLevel(logging.DEBUG)
+else:
+    logger.setLevel(logging.INFO)
 
+#all wkt objects feeded to scihub will keep rounding_precision digits (2 = 0.01 )
+#this will allow to not have too long requests
+rounding_precision=2
 
 urlapi='https://scihub.copernicus.eu/apihub/search'
 
@@ -156,10 +162,14 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         if ddeg > 0.0:
             shape=shape.buffer(ddeg,resolution=2)
             
+        #round the shape
+        from shapely.wkt import dumps,loads
+        shape=loads(dumps(shape,rounding_precision=rounding_precision))    
+            
         shape=split_boundaries(shape)
         
-        from shapely.wkt import dumps
-        wkt_shape=dumps(shape,rounding_precision=2) # .replace("POINT","")
+       
+        wkt_shape=dumps(shape,rounding_precision=rounding_precision)
         
         footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
         q.append(footprint)
@@ -232,7 +242,8 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
             if cachefile is not None:
                 os.unlink(cachefile)
             
-            raise ValueError("invalid request : %s" % str_query)
+            logger.critical("invalid request : %s" % str_query)
+            break
             
                 
         #logger.debug("totalResults : %s" % root.find(".//totalResults").text )
