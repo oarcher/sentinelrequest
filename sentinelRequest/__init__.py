@@ -7,17 +7,39 @@ import logging
 from collections import OrderedDict
 import hashlib
 from io import StringIO
+import geopandas as gpd
+import pandas as pd
+import shapely.wkt as wkt
+import shapely.ops as ops  
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
 if sys.gettrace():
     logger.setLevel(logging.DEBUG)
+    pd.set_option('display.max_rows', 500)
+    pd.set_option('display.max_columns', 500)
+    pd.set_option('display.width', 1000)
 else:
     logger.setLevel(logging.INFO)
 
 #all wkt objects feeded to scihub will keep rounding_precision digits (2 = 0.01 )
 #this will allow to not have too long requests
 rounding_precision=2
+
+
+answer_fields=[u'acquisitiontype', u'beginposition', u'endposition', u'filename',
+       u'footprint', u'format', u'gmlfootprint', u'identifier',
+       u'ingestiondate', u'instrumentname', u'instrumentshortname',
+       u'lastorbitnumber', u'lastrelativeorbitnumber', u'missiondatatakeid',
+       u'orbitdirection', u'orbitnumber', u'platformidentifier',
+       u'platformname', u'polarisationmode', u'productclass', u'producttype',
+       u'relativeorbitnumber', u'sensoroperationalmode', u'size',
+       u'slicenumber', u'status', u'swathidentifier', u'url',
+       u'url_alternative', u'url_icon', u'uuid']
+
+
+dateformat="%Y-%m-%dT%H:%M:%S.%fZ"
+dateformat_alt="%Y-%m-%dT%H:%M:%S"
 
 urlapi='https://scihub.copernicus.eu/apihub/search'
 
@@ -86,21 +108,454 @@ def split_boundaries(shape):
     ie lon=-181 is outside the map -180 -> 180 
     split_boundaries return a polygon collection from a polygon that are all on the map
     """
-    from shapely.wkt import loads
+    
     from shapely.ops import transform
     from shapely.geometry import MultiPolygon
-    plan_map=loads("POLYGON ((-180 -90, -180 90, 180 90, 180 -90, -180 -90))")
-    if shape.overlaps(plan_map):
-        logger.debug("shape %s is outside the map" % shape)
-        shape_in=shape.intersection(plan_map)
-        shape_out=shape.difference(plan_map)
-        shape_out=transform(shape180, shape_out)
-        import numpy as np
-        if np.std(np.array(shape_out.exterior.xy[0])) > 10:
-            logger.debug('possible pb')
-        shape=MultiPolygon([shape_in,shape_out])
-    return shape
+    plan_map=wkt.loads("POLYGON ((-180 -90, -180 90, 180 90, 180 -90, -180 -90))")
+    try:
+        # shape is a multi shape
+        shapes_list = list(shape)
+    except TypeError:
+        shapes_list = [shape]
     
+    shapes_split_in = []
+    shapes_split_out = []
+    shapes_non_overlap = []
+    for s in shapes_list:   
+        if s.overlaps(plan_map):
+            logger.debug("shape %s is outside the map" % shape)
+            shape_in=s.intersection(plan_map)
+            shape_out=s.difference(plan_map)
+            shape_out=transform(shape180, shape_out)
+            shapes_split_in.append(shape_in)
+            shapes_split_out.append(shape_out)
+        else:
+            shapes_non_overlap.append(s)
+
+    shape=ops.cascaded_union(shapes_split_in + shapes_split_out + shapes_non_overlap)
+    return shape
+
+def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
+    """
+    real scihub query, as done on https://scihub.copernicus.eu/dhus/#/home
+    but with cache handling
+    
+    return a geodataframe with responses
+    """
+    
+    retry_init = 3
+    
+    safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint')
+    start=0
+    count=1 # arbitrary count > start
+    retry=retry_init
+    while start < count:
+        params=OrderedDict([("start" ,start ), ("rows", 100), ("q",str_query)])
+        root=None
+        cachefile=None
+        if cachedir is not None:
+            md5request=hashlib.md5(("%s" % params).encode('utf-8')).hexdigest()
+            cachefile=os.path.join(cachedir,md5request)
+            if os.path.exists(cachefile):
+                logger.debug("reading from cachefile %s" % cachefile)
+                try:
+                    with open(cachefile, 'a'):
+                        os.utime(cachefile, None)
+                except Exception as e:
+                    logger.warning('unable to touch %s : %s' % (cachefile , str(e) ) )
+                    
+                try:
+                    root = remove_dom(etree.parse(cachefile))
+                except Exception as e:
+                    logger.warning('removing invalid cachefile %s : %s' % (cachefile,str(e)))
+                    os.unlink(cachefile)
+                    root=None
+                
+        
+        if root is None:
+            # request not cached
+            xmlout=requests.get(urlapi,auth=(user,password),params=params)
+        
+            try:
+                root = remove_dom(etree.fromstring(xmlout.content))
+            except:
+                try:
+                    import html2text
+                    content=html2text.html2text(str(xmlout.content))
+                except:
+                    logger.info("html2text not found. dumping raw html")
+                    content=xmlout.content
+                    
+                if 'Timeout occured while waiting response from server' in content:
+                    retry-=1
+                    logger.warning('Timeout while processing request : %s' % str_query)
+                    logger.warning('left rerty : %s' % retry)
+                    if retry == 0:
+                        raise ConnectionError('Giving up')
+                    continue
+                    
+                    
+                logger.critical("Error while parsing xml answer")
+                logger.critical("query was: %s" % str_query )
+                logger.critical("answer is: \n %s" % content)
+                raise ValueError('scihub query error')
+            
+            if cachefile is not None:
+                try:
+                    with open(cachefile,'wb') as f:
+                        f.write(etree.tostring(root, pretty_print=True))
+                except Exception as e:
+                    logger.warning('unable to write cachefile %s : %s' % (cachefile, str(e)))
+                
+            
+        
+        #<opensearch:totalResults>442</opensearch:totalResults>\n
+        try:
+            count=int(root.find(".//totalResults").text)
+        except:
+            # there was an error in request
+            if cachefile is not None:
+                os.unlink(cachefile)
+            
+            logger.critical("invalid request : %s" % str_query)
+            break
+        
+        # reset retry since last request is ok
+        retry = retry_init
+                
+        #logger.debug("totalResults : %s" % root.find(".//totalResults").text )
+        logger.debug("%s" % root.find(".//subtitle").text )
+        #logger.debug("got %d entry starting at %d" % (len(root.findall(".//entry")),start))
+        
+        if len(root.findall(".//entry")) > 0:
+            for entry in root.findall(".//entry"):
+                #filename=entry.find("str[@name = 'filename']").text
+                safe={}
+                
+                # get all str objects
+                for str_entry in entry.findall("str"):
+                    safe[str_entry.attrib['name']]=str_entry.text
+                # get all int objects
+                for int_entry in entry.findall("int"):
+                    safe[int_entry.attrib['name']]=int(int_entry.text)
+                # get all date objects
+                for date_entry in entry.findall("date"):
+                    try:
+                        safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text,dateformat)
+                    except ValueError:
+                        safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text[0:19],dateformat_alt)
+                    
+                for link in entry.findall("link"):
+                    url_name='url'
+                    if 'rel' in link.attrib:
+                        url_name="%s_%s" % (url_name, link.attrib['rel'])
+                    safe[url_name]=link.attrib['href']
+
+
+                # convert fooprint to wkt
+                safe['footprint'] = wkt.loads(safe['footprint'])
+                
+                
+                # append to safes
+                safes=safes.append(safe, ignore_index=True)
+                start+=1
+            # sort by sensing date
+            safes=safes.sort_values('beginposition')
+            safes.reset_index(drop=True,inplace=True)
+    
+    return safes
+    
+    
+def colocalize(safes, gdf):
+    """colocalize safes and gdf"""
+    safes_coloc = safes.iloc[0:0,:].copy()
+    
+    for gdf_index , gdf_item in gdf.iterrows():
+        begindate=gdf_item.beginposition 
+        enddate=gdf_item.endposition
+        # time coloc
+        for safe_index , safe in safes.iterrows():
+            # check for time range overlap
+            latest_start = max(safe.beginposition , begindate)
+            earliest_end = min(safe.endposition , enddate)
+            overlap = (earliest_end - latest_start)
+            
+            if overlap >= datetime.timedelta(0) : 
+                # intersection coloc
+                if getattr(safe,safes.geometry.name).intersects(getattr(gdf_item,gdf.geometry.name)):
+                    #ddeg = getattr(safe,safes.geometry.name).centroid.distance(getattr(gdf_item,gdf.geometry.name).centroid)
+                    colocated = safes.loc[[safe_index]]  # one row df
+                    # set same index as rom from gdf by adding temp col
+                    colocated['__rowindex'] = gdf_index
+                    colocated.set_index('__rowindex',drop=True,inplace=True)
+                    colocated.rename_axis(gdf.index.name,inplace=True)
+                    #colocated['ddeg'] =  ddeg
+                    #colocated['dtime'] = overlap # to be investigated
+                    if colocated.iloc[0]['filename'] in safes_coloc['filename']:
+                        logger.debug('here')
+                        pass
+                    safes_coloc = safes_coloc.append(colocated)
+        
+    
+    return safes_coloc
+
+def remove_duplicates(safes_ori,keep_list=[]):
+    safes=safes_ori.copy()
+    if not safes.empty:
+        # remove duplicate safes
+        
+        # add a temporary col with filename radic
+        safes['__filename_radic'] = [f[0:62] for f in safes['filename']]
+        
+        uniques_radic=safes['__filename_radic'].unique() 
+        
+        
+        for filename_radic in uniques_radic:
+            sames_safes=safes[safes['__filename_radic'] == filename_radic]
+            if len(sames_safes) > 1:
+                logger.debug("duplicate prodid : %s" % ([s for s in sames_safes['filename']]))
+                force_keep=list(set(sames_safes['filename']).intersection(keep_list))
+                to_keep = sames_safes['ingestiondate'].max()  #warning : may induce late reprocessing (ODL link) . min() is safer, but not the best quality
+                
+                if force_keep:
+                    _to_keep=sames_safes[sames_safes['filename'] == force_keep[0]]['ingestiondate'].iloc[0]
+                    if _to_keep != to_keep:
+                        logger.warning('remove_duplicate : force keep safe %s' % force_keep[0])
+                        to_keep = _to_keep
+                safes = safes[ (safes['ingestiondate'] == to_keep ) | (safes['__filename_radic'] != filename_radic)]
+                
+                
+        safes.drop('__filename_radic',axis=1,inplace=True)
+    return safes
+
+def get_datatakes(safes, datatake=0, user='guest', password='guest', cachedir=None):
+    safes['datatake_index'] = 0
+    for safe in list(safes['filename']):
+        safe_index = safes[safes['filename'] == safe].index[0]
+        takeid=safe.split('_')[-2]
+        safe_rad="_".join(safe.split('_')[0:4])
+        safes_datatake=scihubQuery_raw('filename:%s_*_*_*_%s_*' % (safe_rad, takeid),user=user,password=password,cachedir=cachedir)
+        #FIXME duplicate are removed, even if duplicate=True 
+        safes_datatake = remove_duplicates(safes_datatake,keep_list=[safe])
+        
+        try:
+            ifather = safes_datatake[safes_datatake['filename'] == safe].index[0]
+        except:
+            logger.warn('Father safe was not the most recent one (scihub bug ?)')
+        
+        
+        #ifather=safes_datatake.index.get_loc(father) # convert index to iloc
+        
+        safes_datatake['datatake_index'] = safes_datatake.index - ifather
+        
+        
+        # get adjacent safes
+        safes_datatake = safes_datatake[abs(safes_datatake['datatake_index']) <= datatake]
+        
+        # set same index as father safe
+        safes_datatake.set_index(gpd.GeoSeries([safe_index] * len(safes_datatake)),inplace=True)
+        
+        # remove datatake allready in safes (ie father and allready colocated )
+        for safe_datatake in safes_datatake['filename']:
+            if (safes['filename'] == safe_datatake).any():
+                #FIXME take the lowest abs(datatake_index)
+                safes_datatake=safes_datatake[safes_datatake['filename'] != safe_datatake]
+        
+        
+        safes = safes.append(safes_datatake)
+    return safes
+    
+def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1)):
+    """ return a normalized gdf list 
+    start/stop date name will be 'beginposition' and 'endposition'
+    """
+    norm_gdf=gdf.copy()
+    gdf_slices = []
+    
+    if date in norm_gdf:
+        if (startdate not in norm_gdf) and (stopdate not in norm_gdf):
+            norm_gdf['beginposition'] = norm_gdf[date] - dtime
+            norm_gdf['endposition'] = norm_gdf[date] + dtime
+        else:
+            raise ValueError('date keyword conflict with startdate/stopdate')
+    
+    if (startdate in norm_gdf) and (startdate != 'beginposition'):
+        norm_gdf['beginposition'] = norm_gdf[startdate]
+        
+    if (stopdate in norm_gdf) and (stopdate != 'endposition'):
+        norm_gdf['beginposition'] = norm_gdf[stopdate]
+        
+        
+    # slice
+    if timedelta_slice is not None:
+        mindate=norm_gdf['beginposition'].min()
+        maxdate=norm_gdf['endposition'].max()
+        slice_begin = mindate
+        slice_end = slice_begin
+        while slice_end <= maxdate:
+            slice_end = slice_begin + timedelta_slice
+            gdf_slices.append(norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ])
+            slice_begin = slice_end
+    else:
+        gdf_slices = norm_gdf 
+    
+    return gdf_slices
+
+def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
+    """
+    query='(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
+    input:
+        gdf : None geodataframe with geometry and date
+        date: column name if gdf, or datetime object
+        dtime : if date is not None, dtime as timedelta object will be used to compute startdate and stopdate 
+        startdate : None or column  name in gdf , or datetime object . not used if date and dtime are defined
+        stopdate : None or column  name in gdf , or datetime object . not used if date and dtime are defined
+        duplicate : if True, will return safes with same prodid
+        datatake : number of adjacent safes to return (ie 0 will return 1 safe, 1 return 3, 2 return 5, etc )
+        cachedir : cache requests for speed up
+        cacherefreshrecent : timedelta from now. if requested stopdate is recent, will refresh the cache to let scihub ingest new data
+        
+    """
+    
+    gdflist= normalize_gdf(gdf,startdate=startdate,stopdate=stopdate,date=date,dtime=dtime,timedelta_slice=timedelta_slice)
+    safes_list = []
+    
+    if show:
+        import matplotlib.pyplot as plt
+        ax = plt.axes()
+    
+    # decide if loop is over dataframe or over rows
+    if isinstance(gdflist, list):
+        iter_gdf = gdflist
+    else:
+        iter_gdf = gdflist.itertuples()
+    
+    for gdf_slice in iter_gdf:
+        if isinstance(gdf_slice, tuple):
+            gdf_slice=gpd.GeoDataFrame([gdf_slice],index=[gdf_slice.Index]) #.reindex_like(gdf) # only one row
+            
+        if gdf_slice.empty:
+            continue
+    
+        q=[]
+        footprint=""
+        datePosition=""
+        dateage = datetime.timedelta(weeks=100000) # old date age  per default too allow caching if no dates provided
+            
+            
+        # get min/max date
+        mindate = gdf_slice['beginposition'].min()
+        maxdate = gdf_slice['endposition'].max()
+        dateage=(datetime.datetime.utcnow() - maxdate) # used for cache age
+        
+        if dateage < cacherefreshrecent:
+            logger.debug("recent request. disabling cache")
+            _cachedir = None
+        else:
+            _cachedir = cachedir
+        
+        
+        
+                
+            
+            
+                
+        datePosition="beginPosition:[%s TO %s]" % (mindate.strftime(dateformat) , maxdate.strftime(dateformat) ) # shorter request . endPosition is just few seconds in future
+        q.append(datePosition)
+            
+        q.append("filename:%s" % filename)
+        
+        if query:
+            q.append("(%s)" % query)
+        
+       
+        
+        # get geometry enveloppe
+        if timedelta_slice is not None:
+            from shapely.geometry.collection import GeometryCollection
+            shape = GeometryCollection(list(gdf_slice.geometry))
+            shape = shape.buffer(2.0)
+            shape = shape.simplify(1.5)        
+        else:
+            shape = ops.cascaded_union(gdf_slice.geometry) # will return the unique geometry of the unique ow
+        #round the shape
+        shape=wkt.loads(wkt.dumps(shape,rounding_precision=rounding_precision))    
+        shape=split_boundaries(shape)
+        wkt_shape=wkt.dumps(shape,rounding_precision=rounding_precision)
+        
+        footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
+        q.append(footprint)
+        
+        
+        str_query = ' AND '.join(q)
+        
+        logger.debug("query: %s" % str_query)
+        
+        safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=_cachedir)
+        
+        safes=colocalize(safes_unfiltered, gdf_slice)
+        
+        if duplicate:
+            safes = remove_duplicates(safes)
+        
+            
+        # datatake collection to be done after colocalisation
+        if datatake != 0:
+            logger.debug("Asking for same datatakes")
+            safes = get_datatakes(safes, datatake=datatake, user=user,password=password,cachedir=_cachedir)
+                
+        if not duplicate:
+            safes = remove_duplicates(safes)
+        
+            
+        # sort by sensing date  
+        safes=safes.sort_values('beginposition')
+                    
+        if safes.empty:
+            logger.debug("No results from scihub. Will return empty.")
+            
+        
+        if show:
+            
+            
+            
+            
+            #continents = continents.intersection(shape)
+            #map = continents.plot(color='white', edgecolor='black')
+        
+            
+            gdf_slice.plot(ax=ax, color='green',alpha=0.3,label='user request')
+            #ax.legend()
+            if shape is not None:
+                
+                gdf_sel=gpd.GeoDataFrame({'geometry':[shape]})
+                gdf_sel.plot(ax=ax,color='none',edgecolor='red', label='scihub request')
+                ax.legend()
+                
+            safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',legend=True, label='not colocated')
+            ax.legend()
+            if len(safes) > 0:
+                safes.plot(ax=ax,color='none' , edgecolor='blue', legend=True, label='colocated')
+                try:
+                    safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan', legend=True, label='datatake')
+                except:
+                    pass # no datatake
+                #ax.legend()
+            continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+            continents = continents.intersection(shape.buffer(5).envelope)
+            continents.plot(ax=ax)
+            ax.legend( loc='upper center')
+            
+            
+  
+        safes_list.append(safes)
+        
+    if show:
+        plt.show()    
+    all_safes = pd.concat(safes_list,sort=False)
+    all_safes = all_safes.sort_values('beginposition')
+    
+    return all_safes    
 
 def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, duplicate=False, query=None, user='guest', password='guest', show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
@@ -163,13 +618,13 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
             shape=shape.buffer(ddeg,resolution=2)
             
         #round the shape
-        from shapely.wkt import dumps,loads
-        shape=loads(dumps(shape,rounding_precision=rounding_precision))    
+        
+        shape=wkt.loads(wkt.dumps(shape,rounding_precision=rounding_precision))    
             
         shape=split_boundaries(shape)
         
        
-        wkt_shape=dumps(shape,rounding_precision=rounding_precision)
+        wkt_shape=wkt.dumps(shape,rounding_precision=rounding_precision)
         
         footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
         q.append(footprint)
@@ -187,7 +642,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         root=None
         cachefile=None
         if cachedir is not None:
-            md5request=hashlib.md5("%s" % params).hexdigest()
+            md5request=hashlib.md5(("%s" % params).encode('utf-8')).hexdigest()
             cachefile=os.path.join(cachedir,md5request)
             if os.path.exists(cachefile):
                 if dateage > cacherefreshrecent:
@@ -227,7 +682,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
             
             if cachefile is not None:
                 try:
-                    with open(cachefile,'w') as f:
+                    with open(cachefile,'wb') as f:
                         f.write(etree.tostring(root, pretty_print=True))
                 except:
                     logger.warning('unable to write cachefile %s' % cachefile)
@@ -332,8 +787,6 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         import pandas as pd
         safes=pd.DataFrame(safes)
         try:
-            import geopandas as gpd
-            from shapely import wkt
             if 'footprint' in safes:
                 safes['footprint'] = safes['footprint'].apply(wkt.loads)
                 safes=gpd.GeoDataFrame(safes,geometry='footprint')
@@ -347,6 +800,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         
     if show:
         import matplotlib.pyplot as plt
+        
         map = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).plot(color='white', edgecolor='black')
         
         if lonlat is not None:
