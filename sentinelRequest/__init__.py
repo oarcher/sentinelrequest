@@ -394,7 +394,13 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         slice_end = slice_begin
         while slice_end <= maxdate:
             slice_end = slice_begin + timedelta_slice
-            gdf_slices.append(norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ])
+            gdf_slice=norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ]
+            if gdf_slice.empty and len(gdf) == 1:  
+                # not slicing, but expanding. #FIXME, should drop test len(gdf) == 1
+                gdf_slice=gdf.copy()
+                gdf_slice['beginposition'] = slice_begin
+                gdf_slice['endposition'] = slice_end
+            gdf_slices.append(gdf_slice)
             slice_begin = slice_end
     else:
         gdf_slices = norm_gdf 
