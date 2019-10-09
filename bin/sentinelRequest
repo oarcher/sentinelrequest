@@ -6,8 +6,10 @@ import datetime
 import logging
 import argparse
 
-from sentinelRequest import scihubQuery,logger
-
+from sentinelRequest import scihubQuery_new as scihubQuery
+from sentinelRequest import  logger
+import geopandas as gpd
+import shapely.wkt as wkt
 
 #logging.basicConfig()
 #logger = logging.getLogger(os.path.basename(__file__))
@@ -15,9 +17,6 @@ from sentinelRequest import scihubQuery,logger
 
 
 if __name__ == "__main__":
-    
-    
-    
     dateformat="%Y-%m-%d %H:%M"
     dtime=3
     filename="S1*"
@@ -30,7 +29,8 @@ if __name__ == "__main__":
     parser.add_argument("--user",action="store",default=["guest"],nargs=1,type=str,help="scihub login")
     parser.add_argument("--password",action="store",default=["guest"],nargs=1,type=str,help="scihub password")
     parser.add_argument("--date",action="append",default=None, nargs=1,  type=str,help="date as string. if provided 2 time, first is start, last is stop")
-    parser.add_argument("--coord",action="append",default=None, nargs=1, type=str,help="lon,lat of center. if provided more times, a polygon is used")
+    #parser.add_argument("--coord",action="append",default=None, nargs=1, type=str,help="lon,lat of center. if provided more times, a polygon is used")
+    parser.add_argument("--wkt",action="store",default=[None], nargs=1, type=str,help="wkt representation of the region of interest")
     parser.add_argument("--filename",action="store",default=[filename],nargs=1,type=str,help="filename, with joker. ex 'S1?_?W_GRD*'. default to %s" % filename)
     parser.add_argument("--query",action="store",default=None,nargs=1,type=str,help="""additionnal query. for exemple 'orbitdirection:ASCENDING AND polarisationmode:"VV VH"'""")
     parser.add_argument("--datatake",action="store_true",help="retrieve the whole datatake (ie adjacent SAFEs)")
@@ -40,41 +40,40 @@ if __name__ == "__main__":
     parser.add_argument("--ql",action="store_true",help="download quicklook")
     parser.add_argument("--cachedir",action="store",default=[None],nargs=1,help="cache dir to speedup requests")
     parser.add_argument("--cacherefreshrecent",action="store",default=[7],type=int,nargs=1,help="ignore cache if date is more recent than n days ago")
-    parser.add_argument("--debug",action="store_true",help="show debug messages")
+    parser.add_argument("--printf",action="store",default=["filename"],type=str,nargs=1,help="field output, comma separated")
     parser.add_argument("--show",action="store_true",help="show map with matplotlib")
     
 
     args = parser.parse_args()
     
-    if args.debug:
+    if sys.gettrace():
         logger.setLevel(logging.DEBUG)
         logger.debug("Activating debug messages")
-        import debug
-        try:
-            import debug
-        except:
-            pass
-    # cat /home/datawork-cersat-public/archive/provider/noaa/mirrors/ftp.emc.ncep.noaa.gov/wd20vxt/hwrf-init/decks/bal142018.dat |  awk '($9 + 0) > 64 {print $3"00 "$8" "$7}' | tr -d , | uniq | sed -r 's/([[:digit:]]+)([[:digit:]])N/\1.\2/' | sed -r 's/([[:digit:]]+)([[:digit:]])S/-\1.\2/' | sed -r 's/([[:digit:]]+)([[:digit:]])E/\1.\2/' | sed -r 's/([[:digit:]]+)([[:digit:]])W/-\1.\2/'
     date = None
     if args.date:
         date=[ datetime.datetime.strptime(d[0],args.dateformat[0]) for d in args.date]
     
-    lonlat=[]
-    if args.coord:
-        for coord in args.coord:
-            strlon,strlat=coord[0].split(',')
-            lonlat.append((float(strlon),float(strlat)))
+    if args.wkt:
+        geometry=wkt.loads(args.wkt[0])
+    else:
+        geometry=None
+    
     
     try:
         query=args.query[0]
     except:
         query=None
         
+    gdf = gpd.GeoDataFrame({
+        "beginposition" : date[0],
+        "endposition"   : date[1],
+        "geometry"      : geometry    
+    },index=[0])
     
-    
-    result=scihubQuery(date=date,lonlat=lonlat,ddeg=args.ddeg[0],dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0],show=args.show,cachedir=args.cachedir[0],cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent[0]))
-    if len(result) > 0:
-        for safe in list(result['filename']):
-            print(safe)
-            #out=download_scihub(safe)
+    result=scihubQuery(gdf,dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0],show=args.show,cachedir=args.cachedir[0],cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent[0]))
+    sys.stdout.write(result.to_csv(columns=["filename","footprint"],index=False,sep='|'))
+    #if len(result) > 0:
+    #    for safe in list(result['filename']):
+    #        print(safe)
+    #        #out=download_scihub(safe)
     
