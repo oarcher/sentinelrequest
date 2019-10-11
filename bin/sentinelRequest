@@ -79,7 +79,20 @@ if __name__ == "__main__":
         raise ValueError("bad cols. Available are %s" % result.keys())
         
     if args.outfile:
-        result.to_file(args.outfile,driver=args.outfile_format)
+        # https://github.com/geopandas/geopandas/pull/728 and https://gis.stackexchange.com/questions/281895/changing-shapefiles-field-type-using-fiona/281941#281941
+        # need to modify shema for datetime
+        schema = gpd.io.file.infer_schema(result)
+        schema['properties']['beginposition'] = 'datetime'
+        schema['properties']['endposition'] = 'datetime'
+        
+        # fiona driver
+        import fiona
+        fiona.supported_drivers['KML'] = 'rw'
+        if args.outfile_format not in fiona.supported_drivers:
+            raise ValueError("available outfile_format : %s" % (fiona.supported_drivers ))
+            
+        result.to_file(args.outfile,driver=args.outfile_format,schema=schema)
+            
         logger.info("%s dumped as %s" % (args.outfile , args.outfile_format))
     else:
         sys.stdout.write(result.to_csv(index=False,sep='|'))
