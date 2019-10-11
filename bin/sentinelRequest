@@ -26,22 +26,22 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description = description)
 
-    parser.add_argument("--user",action="store",default=["guest"],nargs=1,type=str,help="scihub login")
-    parser.add_argument("--password",action="store",default=["guest"],nargs=1,type=str,help="scihub password")
+    parser.add_argument("--user",action="store",default="guest",type=str,help="scihub login")
+    parser.add_argument("--password",action="store",default="guest",type=str,help="scihub password")
     parser.add_argument("--date",action="append",default=None, nargs=1,  type=str,help="date as string. if provided 2 time, first is start, last is stop")
-    parser.add_argument("--wkt",action="store",default=[None], nargs=1, type=str,help="wkt representation of the region of interest")
-    parser.add_argument("--filename",action="store",default=[filename],nargs=1,type=str,help="filename, with joker. ex 'S1?_?W_GRD*'. default to %s" % filename)
-    parser.add_argument("--query",action="store",default=None,nargs=1,type=str,help="""additionnal query. for exemple 'orbitdirection:ASCENDING AND polarisationmode:"VV VH"'""")
+    parser.add_argument("--wkt",action="store",default=None, type=str,help="wkt representation of the region of interest")
+    parser.add_argument("--filename",action="store",default=filename,type=str,help="filename, with joker. ex 'S1?_?W_GRD*'. default to %s" % filename)
+    parser.add_argument("--query",action="store",default=None,type=str,help="""additionnal query. for exemple 'orbitdirection:ASCENDING AND polarisationmode:"VV VH"'""")
     parser.add_argument("--datatake",action="store_true",help="retrieve the whole datatake (ie adjacent SAFEs)")
-    parser.add_argument("--dateformat",action="store",default=[dateformat], nargs=1,  type=str,help="strftime date format. default: %%Y-%%m-%%d %%H:%%M" )
-    parser.add_argument("--dtime",action="store",default=[dtime],nargs=1,type=int,help="dtime in hours, if --date has only one date. default to %d" % dtime)
-    parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
-    parser.add_argument("--ql",action="store_true",help="download quicklook")
-    parser.add_argument("--cachedir",action="store",default=[None],nargs=1,help="cache dir to speedup requests")
-    parser.add_argument("--cacherefreshrecent",action="store",default=[7],type=int,nargs=1,help="ignore cache if date is more recent than n days ago")
-    parser.add_argument("--cols",action="store",default=["filename"],type=str,nargs=1,help="field output, comma separated")
-    parser.add_argument("--outfile",action="store",default=[None],type=str,nargs=1,help="outfile. defaut is shp")
-    parser.add_argument("--outfile_format",action="store",default=['ESRI Shapefile'],type=str,nargs=1,help="outfile format. see driver option in geopandas.to_file")
+    parser.add_argument("--dateformat",action="store",default=dateformat,  type=str,help="strftime date format. default: %%Y-%%m-%%d %%H:%%M" )
+    parser.add_argument("--dtime",action="store",default=dtime,type=int,help="dtime in hours, if --date has only one date. default to %d" % dtime)
+    #parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
+    #parser.add_argument("--ql",action="store_true",help="download quicklook")
+    parser.add_argument("--cachedir",action="store",default=None,help="cache dir to speedup requests")
+    parser.add_argument("--cacherefreshrecent",action="store",default=7,type=int,help="ignore cache if date is more recent than n days ago")
+    parser.add_argument("--cols",action="store",default="filename",type=str,help="field output, comma separated")
+    parser.add_argument("--outfile",action="store",default=None,type=str,help="outfile. defaut is shp")
+    parser.add_argument("--outfile_format",action="store",default='ESRI Shapefile',type=str,help="outfile format. see driver option in geopandas.to_file")
     parser.add_argument("--show",action="store_true",help="show map with matplotlib")
     
 
@@ -52,16 +52,16 @@ if __name__ == "__main__":
         logger.debug("Activating debug messages")
     date = None
     if args.date:
-        date=[ datetime.datetime.strptime(d[0],args.dateformat[0]) for d in args.date]
+        date=[ datetime.datetime.strptime(d[0],args.dateformat) for d in args.date]
     
     if args.wkt:
-        geometry=wkt.loads(args.wkt[0])
+        geometry=wkt.loads(args.wkt)
     else:
         geometry=None
     
     
     try:
-        query=args.query[0]
+        query=args.query
     except:
         query=None
         
@@ -71,16 +71,16 @@ if __name__ == "__main__":
         "geometry"      : geometry    
     },index=[0])
     
-    result=scihubQuery(gdf,dtime=datetime.timedelta(hours=args.dtime[0]),filename=args.filename[0],query=query,datatake=args.datatake,user=args.user[0],password=args.password[0],show=args.show,cachedir=args.cachedir[0],cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent[0]))
-    cols=args.cols[0].split(',')
+    result=scihubQuery(gdf,dtime=datetime.timedelta(hours=args.dtime),filename=args.filename,query=query,datatake=args.datatake,user=args.user,password=args.password,show=args.show,cachedir=args.cachedir,cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
+    cols=args.cols.split(',')
     try:
         result=result[cols]
     except:
         raise ValueError("bad cols. Available are %s" % result.keys())
         
-    if args.outfile[0]:
-        result.to_file(args.outfile[0],driver=args.outfile_format[0])
-        logger.info("%s dumped as %s" % (args.outfile[0] , args.outfile_format[0]))
+    if args.outfile:
+        result.to_file(args.outfile,driver=args.outfile_format)
+        logger.info("%s dumped as %s" % (args.outfile , args.outfile_format))
     else:
         sys.stdout.write(result.to_csv(index=False,sep='|'))
     
