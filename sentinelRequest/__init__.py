@@ -459,12 +459,6 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
             _cachedir = None
         else:
             _cachedir = cachedir
-        
-        
-        
-                
-            
-            
                 
         datePosition="beginPosition:[%s TO %s]" % (mindate.strftime(dateformat) , maxdate.strftime(dateformat) ) # shorter request . endPosition is just few seconds in future
         q.append(datePosition)
@@ -473,8 +467,6 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
         
         if query:
             q.append("(%s)" % query)
-        
-       
         
         # get geometry enveloppe
         if timedelta_slice is not None:
@@ -517,19 +509,12 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
                     
-        if safes.empty:
-            logger.debug("No results from scihub. Will return empty.")
-            
+       
+        logger.info("from %s to %s : %s SAFES" % (mindate , maxdate, len(safes)))
         
         if show:
-            
-            
-            
-            
             #continents = continents.intersection(shape)
             #map = continents.plot(color='white', edgecolor='black')
-        
-            
             gdf_slice.plot(ax=ax, color='green',alpha=0.3,label='user request')
             #ax.legend()
             if shape is not None:
@@ -789,20 +774,12 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
     if not safes:
         logger.debug("No results from scihub. Will return empty.")
         
-    try:
-        import pandas as pd
-        safes=pd.DataFrame(safes)
-        try:
-            if 'footprint' in safes:
-                safes['footprint'] = safes['footprint'].apply(wkt.loads)
-                safes=gpd.GeoDataFrame(safes,geometry='footprint')
-            else:
-                safes=gpd.GeoDataFrame(safes)
-        except Exception as e:
-            logger.warning('shapely or geopandas not found, returning a dataframe : %s' % str(e))
-            
-    except Exception as e:
-        logger.warning('pandas not found, returning a dict :%s ' % str(e))
+    safes=pd.DataFrame(safes)
+    if 'footprint' in safes:
+        safes['footprint'] = safes['footprint'].apply(wkt.loads)
+        safes=gpd.GeoDataFrame(safes,geometry='footprint')
+    else:
+        safes=gpd.GeoDataFrame(safes)
         
     if show:
         import matplotlib.pyplot as plt

@@ -21,6 +21,13 @@ if __name__ == "__main__":
     dtime=3
     filename="S1*"
     ddeg=0.1
+    fionaDrivers = {
+        'csv' : 'CSV',
+        'shp' : 'ESRI Shapefile',
+        'gpkg': 'GPKG',
+        'kml' : 'KML',
+        'json': 'GeoJSON'
+        }
     
     description = "Requests SAFE list from scihub"
 
@@ -40,8 +47,8 @@ if __name__ == "__main__":
     parser.add_argument("--cachedir",action="store",default=None,help="cache dir to speedup requests")
     parser.add_argument("--cacherefreshrecent",action="store",default=7,type=int,help="ignore cache if date is more recent than n days ago")
     parser.add_argument("--cols",action="store",default="filename",type=str,help="field output, comma separated")
-    parser.add_argument("--outfile",action="store",default=None,type=str,help="outfile. defaut is shp")
-    parser.add_argument("--outfile_format",action="store",default='ESRI Shapefile',type=str,help="outfile format. see driver option in geopandas.to_file")
+    parser.add_argument("--outfile",action="store",default=None,type=str,help="outfile")
+    parser.add_argument("--outfile_format",action="store",default=None,type=str,help="outfile format. default from file ext. see driver option in geopandas.to_file")
     parser.add_argument("--show",action="store_true",help="show map with matplotlib")
     
 
@@ -78,16 +85,25 @@ if __name__ == "__main__":
     except:
         raise ValueError("bad cols. Available are %s" % result.keys())
         
+    logger.info("Total : %s SAFES" % len(result))
     if args.outfile:
         # https://github.com/geopandas/geopandas/pull/728 and https://gis.stackexchange.com/questions/281895/changing-shapefiles-field-type-using-fiona/281941#281941
         # need to modify shema for datetime
         schema = gpd.io.file.infer_schema(result)
-        schema['properties']['beginposition'] = 'datetime'
-        schema['properties']['endposition'] = 'datetime'
+        if 'beginposition' in result:
+            schema['properties']['beginposition'] = 'datetime'
+        if 'endposition' in result:
+            schema['properties']['endposition'] = 'datetime'
         
         # fiona driver
         import fiona
         fiona.supported_drivers['KML'] = 'rw'
+        if args.outfile_format is None:
+            fileext=os.path.splitext(args.outfile)[1][1:]
+            try:
+                args.outfile_format = fionaDrivers[fileext]
+            except:
+                raise ValueError("unknown ext %s. please use --outfile_format" % fileext)
         if args.outfile_format not in fiona.supported_drivers:
             raise ValueError("available outfile_format : %s" % (fiona.supported_drivers ))
             
