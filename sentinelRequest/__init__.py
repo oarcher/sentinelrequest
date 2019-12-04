@@ -149,6 +149,10 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
     start=0
     count=1 # arbitrary count > start
     retry=retry_init
+    
+    if cachedir and not os.path.exists(cachedir):
+        os.makedirs(cachedir)
+    
     while start < count:
         params=OrderedDict([("start" ,start ), ("rows", 100), ("q",str_query)])
         root=None
@@ -184,7 +188,7 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
                     content=html2text.html2text(str(xmlout.content))
                 except:
                     logger.info("html2text not found. dumping raw html")
-                    content=xmlout.content
+                    content=str(xmlout.content)
                     
                 if 'Timeout occured while waiting response from server' in content:
                     retry-=1
@@ -383,7 +387,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         norm_gdf['beginposition'] = norm_gdf[startdate]
         
     if (stopdate in norm_gdf) and (stopdate != 'endposition'):
-        norm_gdf['beginposition'] = norm_gdf[stopdate]
+        norm_gdf['endposition'] = norm_gdf[stopdate]
         
         
     # slice
@@ -395,11 +399,11 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         while slice_end <= maxdate:
             slice_end = slice_begin + timedelta_slice
             gdf_slice=norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ]
-            if gdf_slice.empty and len(gdf) == 1:  
-                # not slicing, but expanding. #FIXME, should drop test len(gdf) == 1
+            if gdf_slice.empty:   
+                # not slicing, but expanding.
                 gdf_slice=gdf.copy()
                 gdf_slice['beginposition'] = slice_begin
-                gdf_slice['endposition'] = slice_end
+                gdf_slice['endposition'] = min(slice_end,maxdate)
             gdf_slices.append(gdf_slice)
             slice_begin = slice_end
     else:
@@ -428,6 +432,7 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
     
     if show:
         import matplotlib.pyplot as plt
+        import matplotlib as mpl
         ax = plt.axes()
     
     # decide if loop is over dataframe or over rows
@@ -515,27 +520,34 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
         if show:
             #continents = continents.intersection(shape)
             #map = continents.plot(color='white', edgecolor='black')
-            gdf_slice.plot(ax=ax, color='green',alpha=0.3,label='user request')
+            handles = []
+            gdf_slice.plot(ax=ax, color='green',alpha=0.3,zorder=1)
+            handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
             #ax.legend()
             if shape is not None:
                 
                 gdf_sel=gpd.GeoDataFrame({'geometry':[shape]})
-                gdf_sel.plot(ax=ax,color='none',edgecolor='red', label='scihub request')
-                ax.legend()
+                gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=2)
+                handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
                 
-            safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',legend=True, label='not colocated')
-            ax.legend()
+            safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',zorder=3)
+            handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             if len(safes) > 0:
-                safes.plot(ax=ax,color='none' , edgecolor='blue', legend=True, label='colocated')
+                safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=3)
+                handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
                 try:
-                    safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan', legend=True, label='datatake')
+                    safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=3)
+                    handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
                 except:
                     pass # no datatake
                 #ax.legend()
             continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-            continents = continents.intersection(shape.buffer(5).envelope)
-            continents.plot(ax=ax)
-            ax.legend( loc='upper center')
+            continents_box = continents.intersection(shape.buffer(5).envelope)
+            try:
+                continents_box.plot(ax=ax,zorder=0)
+            except:
+                continents.plot(ax=ax,zorder=0)
+            ax.legend( loc='upper center',handles=handles)
             
             
   
