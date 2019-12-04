@@ -10,7 +10,8 @@ from io import StringIO
 import geopandas as gpd
 import pandas as pd
 import shapely.wkt as wkt
-import shapely.ops as ops  
+import shapely.ops as ops 
+from shapely.geometry import MultiPolygon 
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -411,7 +412,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     
     return gdf_slices
 
-def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
+def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
     query='(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
     input:
@@ -429,6 +430,9 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
     
     gdflist= normalize_gdf(gdf,startdate=startdate,stopdate=stopdate,date=date,dtime=dtime,timedelta_slice=timedelta_slice)
     safes_list = []
+    
+    if min_sea_percent is not None:
+        earth = MultiPolygon(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
     
     if show:
         import matplotlib.pyplot as plt
@@ -510,7 +514,12 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
         if not duplicate:
             safes = remove_duplicates(safes)
         
-            
+        if min_sea_percent is not None:
+               safes_sea_percent = (safes.area - safes.intersection(earth).area ) / safes.area * 100
+               safes_sea_ok = safes[safes_sea_percent >= min_sea_percent ]
+               safes_sea_nok = safes[safes_sea_percent < min_sea_percent ]
+               safes = safes_sea_ok
+               
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
                     
@@ -533,13 +542,16 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
             safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             if len(safes) > 0:
-                safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=3)
+                safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=4)
                 handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
                 try:
-                    safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=3)
+                    safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=4)
                     handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
                 except:
                     pass # no datatake
+                if min_sea_percent is not None:
+                    safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=3)
+                    handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
                 #ax.legend()
             continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
             continents_box = continents.intersection(shape.buffer(5).envelope)
