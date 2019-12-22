@@ -309,6 +309,9 @@ def colocalize(safes, gdf):
     return safes_coloc
 
 def remove_duplicates(safes_ori,keep_list=[]):
+    """
+    Remove duplicate safe (ie same footprint with same date, but different prodid)
+    """
     safes=safes_ori.copy()
     if not safes.empty:
         # remove duplicate safes
@@ -321,8 +324,8 @@ def remove_duplicates(safes_ori,keep_list=[]):
         
         for filename_radic in uniques_radic:
             sames_safes=safes[safes['__filename_radic'] == filename_radic]
-            if len(sames_safes) > 1:
-                logger.debug("duplicate prodid : %s" % ([s for s in sames_safes['filename']]))
+            if len(sames_safes['filename'].unique()) > 1:
+                logger.debug("prodid count > 1: %s" % ([s for s in sames_safes['filename'].unique()]))
                 force_keep=list(set(sames_safes['filename']).intersection(keep_list))
                 to_keep = sames_safes['ingestiondate'].max()  #warning : may induce late reprocessing (ODL link) . min() is safer, but not the best quality
                 
@@ -331,6 +334,7 @@ def remove_duplicates(safes_ori,keep_list=[]):
                     if _to_keep != to_keep:
                         logger.warning('remove_duplicate : force keep safe %s' % force_keep[0])
                         to_keep = _to_keep
+                logger.debug("only keep : %s " % [ f for f in safes[safes['ingestiondate'] == to_keep]['filename'] ])
                 safes = safes[ (safes['ingestiondate'] == to_keep ) | (safes['__filename_radic'] != filename_radic)]
                 
                 
