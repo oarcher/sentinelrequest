@@ -44,6 +44,11 @@ dateformat_alt="%Y-%m-%dT%H:%M:%S"
 
 urlapi='https://scihub.copernicus.eu/apihub/search'
 
+# earth as multi poly
+earth = MultiPolygon(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
+# valid coords
+plan_map=wkt.loads("POLYGON ((-180 -90, -180 90, 180 90, 180 -90, -180 -90))")
+
 #download_scihub_url={  # %s : uuid
 #    "main" : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/$value",
 #    "alt"  : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/",
@@ -112,7 +117,6 @@ def split_boundaries(shape):
     
     from shapely.ops import transform
     from shapely.geometry import MultiPolygon
-    plan_map=wkt.loads("POLYGON ((-180 -90, -180 90, 180 90, 180 -90, -180 -90))")
     try:
         # shape is a multi shape
         shapes_list = list(shape)
@@ -431,12 +435,11 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
     gdflist= normalize_gdf(gdf,startdate=startdate,stopdate=stopdate,date=date,dtime=dtime,timedelta_slice=timedelta_slice)
     safes_list = []
     
-    if min_sea_percent is not None:
-        earth = MultiPolygon(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
     
     if show:
         import matplotlib.pyplot as plt
         import matplotlib as mpl
+        plt.figure(figsize=(10,7))
         ax = plt.axes()
     
     # decide if loop is over dataframe or over rows
@@ -530,37 +533,48 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
             #continents = continents.intersection(shape)
             #map = continents.plot(color='white', edgecolor='black')
             handles = []
-            gdf_slice.plot(ax=ax, color='green',alpha=0.3,zorder=1)
+            gdf_slice.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
             #ax.legend()
             if shape is not None:
                 
                 gdf_sel=gpd.GeoDataFrame({'geometry':[shape]})
-                gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=2)
+                gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=3)
                 handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
                 
-            safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',zorder=3)
+            safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
             handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             if len(safes) > 0:
-                safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=4)
+                safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
                 try:
-                    safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=4)
+                    safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
                     handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
                 except:
                     pass # no datatake
                 if min_sea_percent is not None:
-                    safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=3)
+                    safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                     handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
                 #ax.legend()
             continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-            continents_box = continents.intersection(shape.buffer(5).envelope)
-            try:
-                continents_box.plot(ax=ax,zorder=0)
-            except:
-                continents.plot(ax=ax,zorder=0)
-            ax.legend( loc='upper center',handles=handles)
+            continents.plot(ax=ax,zorder=0)
+            bounds = shape.buffer(5).bounds
             
+            ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
+            ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
+                        
+            #continents_box = continents.intersection(shape.buffer(5).envelope).intersection(plan_map)
+            #try:
+            #    continents_box.plot(ax=ax,zorder=0)
+            #except:
+            #    continents.plot(ax=ax,zorder=0)
+            #earth_box = earth.intersection(shape.buffer(5).envelope).intersection(plan_map)
+            #gpd.GeoDataFrame({"geometry" : earth_box}).plot(ax=ax,zorder=0,color='black',edgecolor='black')
+            plt.tight_layout()
+            box = ax.get_position()
+            ax.set_position([box.x0, box.y0 , box.width , box.height * 0.8])
+            
+            ax.legend(handles=handles,loc='lower center', bbox_to_anchor=(0.5, 1.05),ncol=5)
             
   
         safes_list.append(safes)
