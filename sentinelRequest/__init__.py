@@ -433,14 +433,10 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
     """
     
     gdflist= normalize_gdf(gdf,startdate=startdate,stopdate=stopdate,date=date,dtime=dtime,timedelta_slice=timedelta_slice)
-    safes_list = []
-    
-    
-    if show:
-        import matplotlib.pyplot as plt
-        import matplotlib as mpl
-        plt.figure(figsize=(10,7))
-        ax = plt.axes()
+    safes_list = []  # final request
+    safes_unfiltered_list = [] # raw request
+    safes_sea_ok_list = []
+    safes_sea_nok_list = []
     
     # decide if loop is over dataframe or over rows
     if isinstance(gdflist, list):
@@ -525,66 +521,64 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
                
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
-                    
-       
         logger.info("from %s to %s : %s SAFES" % (mindate , maxdate, len(safes)))
-        
-        if show:
-            #continents = continents.intersection(shape)
-            #map = continents.plot(color='white', edgecolor='black')
-            handles = []
-            gdf_slice.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
-            handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
-            #ax.legend()
-            if shape is not None:
-                
-                gdf_sel=gpd.GeoDataFrame({'geometry':[shape]})
-                gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=3)
-                handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
-                
-            safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
-            handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
-            if len(safes) > 0:
-                safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.2)
-                handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
-                try:
-                    safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
-                    handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
-                except:
-                    pass # no datatake
-                if min_sea_percent is not None:
-                    safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
-                    handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
-                #ax.legend()
-            continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-            continents.plot(ax=ax,zorder=0)
-            bounds = shape.buffer(5).bounds
-            
-            ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
-            ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
-                        
-            #continents_box = continents.intersection(shape.buffer(5).envelope).intersection(plan_map)
-            #try:
-            #    continents_box.plot(ax=ax,zorder=0)
-            #except:
-            #    continents.plot(ax=ax,zorder=0)
-            #earth_box = earth.intersection(shape.buffer(5).envelope).intersection(plan_map)
-            #gpd.GeoDataFrame({"geometry" : earth_box}).plot(ax=ax,zorder=0,color='black',edgecolor='black')
-            plt.tight_layout()
-            box = ax.get_position()
-            ax.set_position([box.x0, box.y0 , box.width , box.height * 0.8])
-            
-            ax.legend(handles=handles,loc='lower center', bbox_to_anchor=(0.5, 1.05),ncol=5)
-            
-  
+
         safes_list.append(safes)
+        safes_unfiltered_list.append(safes_unfiltered)
+        if min_sea_percent is not None:
+            safes_sea_ok_list.append(safes_sea_ok)
+            safes_sea_nok_list.append(safes_sea_nok)
         
-    if show:
-        plt.show()    
-    all_safes = pd.concat(safes_list,sort=False)
-    all_safes = all_safes.sort_values('beginposition')
+    safes = pd.concat(safes_list,sort=False)
+    safes = safes.sort_values('beginposition')
+    safes_unfiltered = pd.concat(safes_unfiltered_list)
+    if min_sea_percent is not None:
+        safes_sea_ok = pd.concat(safes_sea_ok_list)
+        safes_sea_nok = pd.concat(safes_sea_nok_list)
     
-    return all_safes    
+    if show:
+        import matplotlib.pyplot as plt
+        import matplotlib as mpl
+        fig, ax = plt.subplots(figsize=(10,7))
+        handles = []
+        gdf_slice.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
+        handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
+        #ax.legend()
+        if shape is not None:
+            
+            gdf_sel=gpd.GeoDataFrame({'geometry':[shape]})
+            gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=3)
+            handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
+            
+        safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+        handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
+        if len(safes) > 0:
+            safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.2)
+            handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
+            try:
+                safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
+                handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
+            except:
+                pass # no datatake
+            if min_sea_percent is not None:
+                safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
+                handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
+        continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+        continents = continents.to_crs(crs_proj4)
+        continents.plot(ax=ax,zorder=0)
+        #bounds = shape.buffer(5).bounds
+        bounds = safes_unfiltered.unary_union.bounds
+        ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
+        ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
+                    
+        plt.tight_layout()
+        box = ax.get_position()
+        ax.set_position([box.x0, box.y0 , box.width , box.height * 0.8])
+        
+        ax.legend(handles=handles,loc='lower center', bbox_to_anchor=(0.5, 1.05),ncol=5)
+        plt.show()    
+    
+    return safes    
 
 def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, duplicate=False, query=None, user='guest', password='guest', show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
