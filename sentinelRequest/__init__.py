@@ -531,10 +531,10 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
         
     safes = pd.concat(safes_list,sort=False)
     safes = safes.sort_values('beginposition')
-    safes_unfiltered = pd.concat(safes_unfiltered_list)
+    safes_unfiltered = pd.concat(safes_unfiltered_list,sort=False)
     if min_sea_percent is not None:
-        safes_sea_ok = pd.concat(safes_sea_ok_list)
-        safes_sea_nok = pd.concat(safes_sea_nok_list)
+        safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
+        safes_sea_nok = pd.concat(safes_sea_nok_list,sort=False)
     
     if show:
         import matplotlib.pyplot as plt
@@ -564,7 +564,6 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
                 safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-        continents = continents.to_crs(crs_proj4)
         continents.plot(ax=ax,zorder=0)
         #bounds = shape.buffer(5).bounds
         bounds = safes_unfiltered.unary_union.bounds
