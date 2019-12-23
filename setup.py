@@ -10,4 +10,5 @@ setup(name='sentinelRequest',
       packages=['sentinelRequest'],
       zip_safe=False,
       scripts=['bin/sentinelRequest'],
+      install_requires=[ 'geopandas', 'requests',  'lxml',  'fiona' , 'html2text' ]
 )
