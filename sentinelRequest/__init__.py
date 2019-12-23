@@ -494,24 +494,28 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         
         footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
         q.append(footprint)
-        
-        
         str_query = ' AND '.join(q)
-        
         logger.debug("query: %s" % str_query)
         
         safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=_cachedir)
+        logger.debug("requested safes from scihub : %s" % len(safes_unfiltered))
+        
         
         safes=colocalize(safes_unfiltered, gdf_slice)
+        logger.debug("colocated with user query : %s" % len(safes))
         
         if duplicate:
+            nsafes = len(safes)
             safes = remove_duplicates(safes)
+            logger.debug("removed %s duplicates" % nsafes-len(safes))
         
             
         # datatake collection to be done after colocalisation
         if datatake != 0:
             logger.debug("Asking for same datatakes")
+            nsafes = len(safes)
             safes = get_datatakes(safes, datatake=datatake, user=user,password=password,cachedir=_cachedir)
+            logger.debug("added %s datatakes" % len(safes)-nsafes)
                 
         if not duplicate:
             safes = remove_duplicates(safes)
