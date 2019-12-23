@@ -78,7 +78,16 @@ if __name__ == "__main__":
         "geometry"      : geometry    
     },index=[0])
     
-    result=scihubQuery(gdf,dtime=datetime.timedelta(hours=args.dtime),filename=args.filename,query=query,datatake=args.datatake,user=args.user,password=args.password,show=args.show,cachedir=args.cachedir,cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
+    fig = None
+    if args.show:
+        import matplotlib.pyplot as plt
+        fig = plt.figure(figsize=(10,7))
+    
+    result=scihubQuery(gdf,dtime=datetime.timedelta(hours=args.dtime),filename=args.filename,query=query,datatake=args.datatake,user=args.user,password=args.password,fig=fig,cachedir=args.cachedir,cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
+    
+    if args.show:
+        plt.show()
+    
     cols=args.cols.split(',')
     try:
         result=result[cols]

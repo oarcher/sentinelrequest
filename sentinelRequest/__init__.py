@@ -416,7 +416,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     
     return gdf_slices
 
-def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
+def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
     
     input:
@@ -430,6 +430,7 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
         query : '(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
         cachedir : cache requests for speed up
         cacherefreshrecent : timedelta from now. if requested stopdate is recent, will refresh the cache to let scihub ingest new data
+        fig : matplotlib fig handle ( default to None : no plot)
     return :
         a geodataframe with safes from scihub, colocated with input gdf (ie same index)
     """
@@ -538,10 +539,10 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
         safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
         safes_sea_nok = pd.concat(safes_sea_nok_list,sort=False)
     
-    if show:
+    if fig is not None:
         import matplotlib.pyplot as plt
         import matplotlib as mpl
-        fig, ax = plt.subplots(figsize=(10,7))
+        ax = fig.add_subplot(111)
         handles = []
         gdf_slice.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
         handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
@@ -570,12 +571,12 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
         ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
         ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
                     
-        plt.tight_layout()
+        fig.tight_layout()
         box = ax.get_position()
         ax.set_position([box.x0, box.y0 , box.width , box.height * 0.8])
         
         ax.legend(handles=handles,loc='lower center', bbox_to_anchor=(0.5, 1.05),ncol=5)
-        plt.show()    
+          
     
     return safes    
 

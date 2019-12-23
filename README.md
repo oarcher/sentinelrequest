@@ -4,6 +4,11 @@ scihub and peps requests from command line and python
 
 ```
 % pip install git+https://gitlab.ifremer.fr/sarwing/sentinelrequest.git
+```
+
+## CLI usage
+
+```
 % sentinelRequest --help
 usage: sentinelRequest [-h] [--user USER] [--password PASSWORD]
                           [--date DATE] [--coord COORD] [--filename FILENAME]
@@ -48,3 +53,7 @@ optional arguments:
                         option in geopandas.to_file
   --show                show map with matplotlib
   ```
+  
+  ## API usage
+  
+  
