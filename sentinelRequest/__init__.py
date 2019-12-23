@@ -437,9 +437,10 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     
     gdflist= normalize_gdf(gdf,startdate=startdate,stopdate=stopdate,date=date,dtime=dtime,timedelta_slice=timedelta_slice)
     safes_list = []  # final request
-    safes_unfiltered_list = [] # raw request
+    safes_not_colocalized_list = [] # raw request
     safes_sea_ok_list = []
     safes_sea_nok_list = []
+    all_shapes = None
     
     # decide if loop is over dataframe or over rows
     if isinstance(gdflist, list):
@@ -492,6 +493,11 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         shape=split_boundaries(shape)
         wkt_shape=wkt.dumps(shape,rounding_precision=rounding_precision)
         
+        if not all_shapes:
+            all_shapes = shape
+        else:
+            all_shapes = all_shapes.union(shape)
+        
         footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
         q.append(footprint)
         str_query = ' AND '.join(q)
@@ -503,6 +509,9 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         
         safes=colocalize(safes_unfiltered, gdf_slice)
         logger.debug("colocated with user query : %s" % len(safes))
+        
+        safes_not_colocalized = safes_unfiltered[~safes_unfiltered['filename'].isin(safes['filename'])]
+        del safes_unfiltered
         
         if duplicate:
             nsafes = len(safes)
@@ -531,14 +540,14 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         logger.info("from %s to %s : %s SAFES" % (mindate , maxdate, len(safes)))
 
         safes_list.append(safes)
-        safes_unfiltered_list.append(safes_unfiltered)
+        safes_not_colocalized_list.append(safes_not_colocalized)
         if min_sea_percent is not None:
             safes_sea_ok_list.append(safes_sea_ok)
             safes_sea_nok_list.append(safes_sea_nok)
         
     safes = pd.concat(safes_list,sort=False)
     safes = safes.sort_values('beginposition')
-    safes_unfiltered = pd.concat(safes_unfiltered_list,sort=False)
+    safes_not_colocalized = pd.concat(safes_not_colocalized_list,sort=False)
     if min_sea_percent is not None:
         safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
         safes_sea_nok = pd.concat(safes_sea_nok_list,sort=False)
@@ -555,7 +564,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
             
-        safes_unfiltered.plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+        safes_not_colocalized.plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
         handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
         if len(safes) > 0:
             safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.2)
@@ -569,9 +578,10 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-        continents.plot(ax=ax,zorder=0)
-        #bounds = shape.buffer(5).bounds
-        bounds = safes_unfiltered.unary_union.bounds
+        continents.plot(ax=ax,zorder=0,color='none',edgecolor='black')
+        #bounds = safes.unary_union.buffer(5).bounds
+        #if not bounds:
+        bounds = all_shapes.buffer(5).bounds
         ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
         ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
                     
