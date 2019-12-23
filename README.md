@@ -127,6 +127,31 @@ gdf
 
 
 ```python
+help(scihubQuery)
+```
+
+    Help on function scihubQuery in module sentinelRequest:
+    
+    scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, timedelta_slice=datetime.timedelta(days=7), filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7))
+        input:
+            gdf : None geodataframe with geometry and date
+            date: column name if gdf, or datetime object
+            dtime : if date is not None, dtime as timedelta object will be used to compute startdate and stopdate 
+            startdate : None or column  name in gdf , or datetime object . not used if date and dtime are defined
+            stopdate : None or column  name in gdf , or datetime object . not used if date and dtime are defined
+            duplicate : if True, will return duplicates safes (ie same safe with different prodid). Default to False
+            datatake : number of adjacent safes to return (ie 0 will return 1 safe, 1 return 3, 2 return 5, etc )
+            query : '(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
+            cachedir : cache requests for speed up
+            cacherefreshrecent : timedelta from now. if requested stopdate is recent, will refresh the cache to let scihub ingest new data
+            fig : matplotlib fig handle ( default to None : no plot)
+        return :
+            a geodataframe with safes from scihub, colocated with input gdf (ie same index)
+    
+
+
+
+```python
 fig = plt.figure(figsize=(10,7))
 safes = scihubQuery(
         gdf=gdf,
@@ -143,7 +168,7 @@ safes = scihubQuery(
 
 
 
-![png](README_files/README_8_1.png)
+![png](README_files/README_9_1.png)
 
 
 The two user area (green) are merged into a simpliest big one (red), but a colocalization with user area is done , to deselect some safes (in yellow ).
