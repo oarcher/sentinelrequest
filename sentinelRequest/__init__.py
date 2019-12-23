@@ -11,7 +11,7 @@ import geopandas as gpd
 import pandas as pd
 import shapely.wkt as wkt
 import shapely.ops as ops 
-from shapely.geometry import MultiPolygon 
+from shapely.geometry import MultiPolygon, GeometryCollection
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -440,7 +440,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     safes_not_colocalized_list = [] # raw request
     safes_sea_ok_list = []
     safes_sea_nok_list = []
-    all_shapes = None
+    all_shapes_list = []
     
     # decide if loop is over dataframe or over rows
     if isinstance(gdflist, list):
@@ -493,10 +493,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         shape=split_boundaries(shape)
         wkt_shape=wkt.dumps(shape,rounding_precision=rounding_precision)
         
-        if not all_shapes:
-            all_shapes = shape
-        else:
-            all_shapes = all_shapes.union(shape)
+        all_shapes_list.append(shape)
         
         footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
         q.append(footprint)
@@ -557,10 +554,10 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         import matplotlib as mpl
         ax = fig.add_subplot(111)
         handles = []
-        gdf_slice.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
+        gdf.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
         handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
-        if shape is not None:
-            gdf_sel=gpd.GeoDataFrame({'geometry':[shape]})
+        if all_shapes_list:
+            gdf_sel=gpd.GeoDataFrame({'geometry':all_shapes_list})
             gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
             
@@ -581,7 +578,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         continents.plot(ax=ax,zorder=0,color='none',edgecolor='black')
         #bounds = safes.unary_union.buffer(5).bounds
         #if not bounds:
-        bounds = all_shapes.buffer(5).bounds
+        bounds = GeometryCollection(all_shapes_list).buffer(5).bounds
         ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
         ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
                     
