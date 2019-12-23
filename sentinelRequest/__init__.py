@@ -524,7 +524,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             logger.debug("Asking for same datatakes")
             nsafes = len(safes)
             safes = get_datatakes(safes, datatake=datatake, user=user,password=password,cachedir=_cachedir)
-            logger.debug("added %s datatakes" % len(safes)-nsafes)
+            logger.debug("added %s datatakes" % (len(safes)-nsafes))
                 
         if not duplicate:
             safes = remove_duplicates(safes)
