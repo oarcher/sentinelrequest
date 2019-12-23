@@ -6,7 +6,7 @@ import datetime
 import logging
 import argparse
 
-from sentinelRequest import scihubQuery_new as scihubQuery
+from sentinelRequest import scihubQuery
 from sentinelRequest import  logger
 import geopandas as gpd
 import shapely.wkt as wkt

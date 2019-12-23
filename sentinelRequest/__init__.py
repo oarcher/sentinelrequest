@@ -416,7 +416,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     
     return gdf_slices
 
-def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
+def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
     
     input:
@@ -580,7 +580,9 @@ def scihubQuery_new(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,t
     
     return safes    
 
-def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, duplicate=False, query=None, user='guest', password='guest', show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
+scihubQuery_new = scihubQuery
+
+def scihubQuery_deprecated(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0.0 ,filename='S1*', datatake=False, duplicate=False, query=None, user='guest', password='guest', show=False, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
     query='(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
     input:
@@ -593,7 +595,7 @@ def scihubQuery(date=None,dtime=datetime.timedelta(hours=3) ,lonlat=None, ddeg=0
         cacherefreshrecent : timedelta from now. if requested date is recent, will refresh the cache to let scihub ingest new data
         
     """
-    logger.warning("Deprecated. Use scihubQuery_new")
+    logger.warning("Deprecated. Use scihubQuery")
     q=[]
     dateformat="%Y-%m-%dT%H:%M:%S.%fZ"
     dateformat_alt="%Y-%m-%dT%H:%M:%S"
