@@ -3,7 +3,9 @@
 sentinelRequest can be used to colocate a geodataframe (ie areas, trajectories, buoys, etc ...) with sentinel (1, but also 2 , 3 : all known by scihub)
 
 ## Install
-
+```
+% pip install git+https://gitlab.ifremer.fr/sarwing/sentinelrequest.git
+```
 
 ## CLI usage
 
@@ -141,7 +143,7 @@ safes = scihubQuery(
 
 
 
-![png](example_files/example_8_1.png)
+![png](README_files/README_8_1.png)
 
 
 The two user area (green) are merged into a simpliest big one (red), but a colocalization with user area is done , to deselect some safes (in yellow ).
