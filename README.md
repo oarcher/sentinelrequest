@@ -11,6 +11,15 @@ usage: sentinelRequest [-h] [--user USER] [--password PASSWORD]
                           [--dateformat DATEFORMAT] [--dtime DTIME]
                           [--ddeg DDEG] [--ql] [--debug]
 
+sentinelRequest --help
+usage: sentinelRequest [-h] [--user USER] [--password PASSWORD] [--date DATE]
+                       [--wkt WKT] [--filename FILENAME] [--query QUERY]
+                       [--datatake] [--dateformat DATEFORMAT] [--dtime DTIME]
+                       [--cachedir CACHEDIR]
+                       [--cacherefreshrecent CACHEREFRESHRECENT] [--cols COLS]
+                       [--outfile OUTFILE] [--outfile_format OUTFILE_FORMAT]
+                       [--show]
+
 Requests SAFE list from scihub
 
 optional arguments:
@@ -19,19 +28,23 @@ optional arguments:
   --password PASSWORD   scihub password
   --date DATE           date as string. if provided 2 time, first is start,
                         last is stop
-  --coord COORD         lon,lat of center. if provided more times, a polygon
-                        is used
+  --wkt WKT             wkt representation of the region of interest
   --filename FILENAME   filename, with joker. ex 'S1?_?W_GRD*'. default to S1*
   --query QUERY         additionnal query. for exemple
-                        'orbitdirection:ASCENDING AND polarisationmode:"VV
+                          'orbitdirection:ASCENDING AND polarisationmode:"VV
                         VH"'
   --datatake            retrieve the whole datatake (ie adjacent SAFEs)
   --dateformat DATEFORMAT
                         strftime date format. default: %Y-%m-%d %H:%M
   --dtime DTIME         dtime in hours, if --date has only one date. default
                         to 3
-  --ddeg DDEG           ddeg in deg, if --coord has only one lon,lat. default
-                        to 0.10
-  --ql                  download quicklook
-  --debug               show debug messages
+  --cachedir CACHEDIR   cache dir to speedup requests
+  --cacherefreshrecent CACHEREFRESHRECENT
+                        ignore cache if date is more recent than n days ago
+  --cols COLS           field output, comma separated
+  --outfile OUTFILE     outfile
+  --outfile_format OUTFILE_FORMAT
+                        outfile format. default from file ext. see driver
+                        option in geopandas.to_file
+  --show                show map with matplotlib
   ```

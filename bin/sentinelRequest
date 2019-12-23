@@ -47,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument("--cachedir",action="store",default=None,help="cache dir to speedup requests")
     parser.add_argument("--cacherefreshrecent",action="store",default=7,type=int,help="ignore cache if date is more recent than n days ago")
     parser.add_argument("--cols",action="store",default="filename",type=str,help="field output, comma separated")
-    parser.add_argument("--outfile",action="store",default=None,type=str,help="outfile")
+    parser.add_argument("--outfile",action="store",default=None,type=str,help="outfile (ie .csv, .gpkg, .shp ...)")
     parser.add_argument("--outfile_format",action="store",default=None,type=str,help="outfile format. default from file ext. see driver option in geopandas.to_file")
     parser.add_argument("--show",action="store_true",help="show map with matplotlib")
     
