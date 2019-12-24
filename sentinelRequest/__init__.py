@@ -11,7 +11,8 @@ import geopandas as gpd
 import pandas as pd
 import shapely.wkt as wkt
 import shapely.ops as ops 
-from shapely.geometry import MultiPolygon, GeometryCollection
+from shapely.geometry import MultiPolygon
+from shapely.geometry.collection import GeometryCollection
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -403,13 +404,24 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         slice_end = slice_begin
         while slice_end <= maxdate:
             slice_end = slice_begin + timedelta_slice
+            # this is time grouping
             gdf_slice=norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ]
-            if gdf_slice.empty:   
-                # not slicing, but expanding.
-                gdf_slice=gdf.copy()
-                gdf_slice['beginposition'] = slice_begin
-                gdf_slice['endposition'] = min(slice_end,maxdate)
-            gdf_slices.append(gdf_slice)
+            for to_expand in list(set(norm_gdf.index) - set(gdf_slice.index)):
+                # missings index in gdf_slice.
+                # check if there is time overlap.
+                latest_start = max(norm_gdf.loc[to_expand].beginposition , slice_begin)
+                earliest_end = min(norm_gdf.loc[to_expand].endposition , slice_end)
+                overlap = (earliest_end - latest_start)
+                if overlap >= datetime.timedelta(0) :
+                    logger.debug("Slicing time for %s : %s to %s" % (to_expand,latest_start,earliest_end))
+                    gdf_slice=gdf_slice.append(norm_gdf.loc[to_expand])
+                    gdf_slice.loc[to_expand,'beginposition'] = latest_start
+                    gdf_slice.loc[to_expand,'endposition'] = earliest_end
+                else:
+                    logger.debug("no time slice for %s in range %s to %s" % (to_expand,slice_begin,slice_end))
+                    
+            if not gdf_slice.empty: 
+                gdf_slices.append(gdf_slice)
             slice_begin = slice_end
     else:
         gdf_slices = norm_gdf 
@@ -420,17 +432,39 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     """
     
     input:
-        gdf : None geodataframe with geometry and date
-        date: column name if gdf, or datetime object
-        dtime : if date is not None, dtime as timedelta object will be used to compute startdate and stopdate 
-        startdate : None or column  name in gdf , or datetime object . not used if date and dtime are defined
-        stopdate : None or column  name in gdf , or datetime object . not used if date and dtime are defined
-        duplicate : if True, will return duplicates safes (ie same safe with different prodid). Default to False
-        datatake : number of adjacent safes to return (ie 0 will return 1 safe, 1 return 3, 2 return 5, etc )
-        query : '(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
-        cachedir : cache requests for speed up
-        cacherefreshrecent : timedelta from now. if requested stopdate is recent, will refresh the cache to let scihub ingest new data
-        fig : matplotlib fig handle ( default to None : no plot)
+        gdf : 
+            None or geodataframe with geometry and date. gdf usually contain almost these cols:
+            index         : an index for the row (for ex area name, buoy id, etc ...)
+            beginposition : datetime object (startdate)
+            endposition   : datetime object (stopdate)
+            geometry      : shapely object
+        date: 
+            column name if gdf, or datetime object
+        dtime : 
+            if date is not None, dtime as timedelta object will be used to compute startdate and stopdate 
+        startdate : 
+            None or column  name in gdf , or datetime object . not used if date and dtime are defined. 
+            Default to 'beginposition'
+        stopdate : 
+            None or column  name in gdf , or datetime object . not used if date and dtime are defined. 
+            Default to 'endposition'
+        timedelta_slice:
+            Max time slicing : Scihub request will be grouped or sliced to this. 
+            Default to datetime.timedelta(weeks=1).
+            If None, no slicing is done.
+        duplicate : 
+            if True, will return duplicates safes (ie same safe with different prodid). Default to False
+        datatake : 
+            number of adjacent safes to return (ie 0 will return 1 safe, 1 return 3, 2 return 5, etc )
+        query : 
+            aditionnal query string, for ex '(platformname:Sentinel-1 AND sensoroperationalmode:WV)' 
+        cachedir : 
+            cache requests for speed up. 
+        cacherefreshrecent : 
+            timedelta from now. if requested stopdate is recent, will refresh the cache to let scihub ingest new data.
+            Default to datetime.timedelta(days=7).
+        fig : 
+            matplotlib fig handle ( default to None : no plot)
     return :
         a geodataframe with safes from scihub, colocated with input gdf (ie same index)
     """
@@ -482,12 +516,13 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         
         # get geometry enveloppe
         if timedelta_slice is not None:
-            from shapely.geometry.collection import GeometryCollection
             shape = GeometryCollection(list(gdf_slice.geometry))
-            shape = shape.buffer(2.0)
-            shape = shape.simplify(1.5)        
         else:
             shape = ops.cascaded_union(gdf_slice.geometry) # will return the unique geometry of the unique ow
+        
+        # scihub request shape is less complex then user shape
+        shape = shape.buffer(2.0)
+        shape = shape.simplify(1.9)        
         #round the shape
         shape=wkt.loads(wkt.dumps(shape,rounding_precision=rounding_precision))    
         shape=split_boundaries(shape)
@@ -560,9 +595,11 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             gdf_sel=gpd.GeoDataFrame({'geometry':all_shapes_list})
             gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
+        
+        if len(safes_not_colocalized) > 0 : 
+            safes_not_colocalized.plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+            handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             
-        safes_not_colocalized.plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
-        handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
         if len(safes) > 0:
             safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.2)
             handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
@@ -571,7 +608,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
             except:
                 pass # no datatake
-            if min_sea_percent is not None:
+            if min_sea_percent is not None and len(safes_sea_nok) > 0:
                 safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
