@@ -363,7 +363,7 @@ def get_datatakes(safes, datatake=0, user='guest', password='guest', cachedir=No
         safes_datatake = safes_datatake[abs(safes_datatake['datatake_index']) <= datatake]
         
         # set same index as father safe
-        safes_datatake.set_index(gpd.GeoSeries([safe_index] * len(safes_datatake)),inplace=True)
+        safes_datatake.set_index(pd.Index([safe_index] * len(safes_datatake)),inplace=True)
         
         # remove datatake allready in safes (ie father and allready colocated )
         for safe_datatake in safes_datatake['filename']:
@@ -536,7 +536,8 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         logger.debug("query: %s" % str_query)
         
         safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=_cachedir)
-        logger.debug("requested safes from scihub : %s" % len(safes_unfiltered))
+        safes_unfiltered_count = len(safes_unfiltered)
+        logger.debug("requested safes from scihub : %s" % safes_unfiltered_count)
         
         
         safes=colocalize(safes_unfiltered, gdf_slice)
@@ -569,7 +570,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
-        logger.info("from %s to %s : %s SAFES" % (mindate , maxdate, len(safes)))
+        logger.info("from %s to %s : %s/%s SAFES" % (mindate , maxdate, len(safes),safes_unfiltered_count))
 
         safes_list.append(safes)
         safes_not_colocalized_list.append(safes_not_colocalized)
@@ -601,13 +602,15 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             
         if len(safes) > 0:
-            safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.2)
-            handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
-            try:
+            if 'datatake_index' in safes:
+                safes[safes['datatake_index'] == 0].plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
                 safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
-            except:
-                pass # no datatake
+            else:
+                safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+            
+            handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
+
             if min_sea_percent is not None and len(safes_sea_nok) > 0:
                 safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
