@@ -39,14 +39,16 @@ if __name__ == "__main__":
     parser.add_argument("--wkt",action="store",default=None, type=str,help="wkt representation of the region of interest")
     parser.add_argument("--filename",action="store",default=filename,type=str,help="filename, with joker. ex 'S1?_?W_GRD*'. default to %s" % filename)
     parser.add_argument("--query",action="store",default=None,type=str,help="""additionnal query. for exemple 'orbitdirection:ASCENDING AND polarisationmode:"VV VH"'""")
-    parser.add_argument("--datatake",action="store_true",help="retrieve the whole datatake (ie adjacent SAFEs)")
+    parser.add_argument("--datatake",action="store",default=0,type=int,help="retrieve adjacents datatake (ie adjacent SAFEs). default to 0 (no datatakes)")
     parser.add_argument("--dateformat",action="store",default=dateformat,  type=str,help="strftime date format. default: %%Y-%%m-%%d %%H:%%M" )
     parser.add_argument("--dtime",action="store",default=dtime,type=int,help="dtime in hours, if --date has only one date. default to %d" % dtime)
     #parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
     #parser.add_argument("--ql",action="store_true",help="download quicklook")
     parser.add_argument("--cachedir",action="store",default=None,help="cache dir to speedup requests")
     parser.add_argument("--cacherefreshrecent",action="store",default=7,type=int,help="ignore cache if date is more recent than n days ago")
-    parser.add_argument("--cols",action="store",default="filename",type=str,help="field output, comma separated")
+    parser.add_argument("--cols",action="store",default="filename",type=str,help="field output, comma separated. for ex --cols=index,filename. An error will show all available fields.")
+    parser.add_argument("--infile",action="store",default=None,type=str,help="infile (ie .csv, .gpkg, .shp ...)")
+    parser.add_argument("--infile_format",action="store",default=None,type=str,help="infile format. default from file ext. see driver option in geopandas.to_file")
     parser.add_argument("--outfile",action="store",default=None,type=str,help="outfile (ie .csv, .gpkg, .shp ...)")
     parser.add_argument("--outfile_format",action="store",default=None,type=str,help="outfile format. default from file ext. see driver option in geopandas.to_file")
     parser.add_argument("--show",action="store_true",help="show map with matplotlib")
@@ -65,18 +67,46 @@ if __name__ == "__main__":
         geometry=wkt.loads(args.wkt)
     else:
         geometry=None
-    
-    
     try:
         query=args.query
     except:
         query=None
-        
-    gdf = gpd.GeoDataFrame({
-        "beginposition" : date[0],
-        "endposition"   : date[1],
-        "geometry"      : geometry    
-    },index=[0])
+
+    if args.infile:
+        # fiona driver
+        import fiona
+        fiona.supported_drivers['KML'] = 'rw'
+        if args.infile_format is None:
+            fileext=os.path.splitext(args.infile)[1][1:]
+            try:
+                args.infile_format = fionaDrivers[fileext]
+            except:
+                raise ValueError("unknown ext %s. please use --infile_format" % fileext)
+        if args.infile_format not in fiona.supported_drivers:
+            raise ValueError("available infile_format : %s" % (fiona.supported_drivers ))
+        if args.infile_format == 'CSV':
+            import pandas as pd
+            import shapely.wkt as wkt
+            df = pd.read_csv(
+                args.infile, delimiter=";")
+            
+            df['geometry'] = df['geometry'].apply(wkt.loads)
+            df['beginposition']=df['beginposition'].apply(lambda x: datetime.datetime.strptime(x,args.dateformat))
+            df['endposition']=df['endposition'].apply(lambda x: datetime.datetime.strptime(x,args.dateformat))
+            gdf = gpd.GeoDataFrame(
+                df, geometry='geometry',
+                crs={'init': 'epsg:4326'},
+            )
+            if 'index' in gdf:
+                gdf.set_index('index',inplace=True)
+        else:
+            gdf = gpd.read_file(args.infile,driver=args.infile_format)
+    else:        
+        gdf = gpd.GeoDataFrame({
+            "beginposition" : date[0],
+            "endposition"   : date[1],
+            "geometry"      : geometry    
+        },index=[0])
     
     fig = None
     if args.show:
@@ -85,10 +115,13 @@ if __name__ == "__main__":
     
     result=scihubQuery(gdf,dtime=datetime.timedelta(hours=args.dtime),filename=args.filename,query=query,datatake=args.datatake,user=args.user,password=args.password,fig=fig,cachedir=args.cachedir,cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
     
+    cols=args.cols.split(',')
+    if 'index' in cols:
+        result['index'] = result.index
+    
     if args.show:
         plt.show()
     
-    cols=args.cols.split(',')
     try:
         result=result[cols]
     except:
@@ -120,6 +153,6 @@ if __name__ == "__main__":
             
         logger.info("%s dumped as %s" % (args.outfile , args.outfile_format))
     else:
-        sys.stdout.write(result.to_csv(index=False,sep='|'))
+        sys.stdout.write(result.to_csv(index=False,sep=';'))
     
     
