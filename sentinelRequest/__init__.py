@@ -261,18 +261,16 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
                         url_name="%s_%s" % (url_name, link.attrib['rel'])
                     safe[url_name]=link.attrib['href']
 
-
-                # convert fooprint to wkt
-                safe['footprint'] = wkt.loads(safe['footprint'])
-                
-                
+                # convert fooprint to wkt. buffer(0) convert multipolygon to polygon if possible
+                safe['footprint'] = wkt.loads(safe['footprint']).buffer(0)
                 # append to safes
                 safes=safes.append(safe, ignore_index=True)
                 start+=1
             # sort by sensing date
             safes=safes.sort_values('beginposition')
             safes.reset_index(drop=True,inplace=True)
-    
+            safes = safes.set_geometry('footprint')
+            #safes['footprint'] = gpd.GeoSeries(safes['footprint'])
     return safes
     
     
@@ -302,9 +300,7 @@ def colocalize(safes, gdf):
                         logger.debug('here')
                         pass
                     safes_coloc = safes_coloc.append(colocated)
-        
-    
-    return safes_coloc
+    return safes_coloc.set_geometry('footprint')
 
 def remove_duplicates(safes_ori,keep_list=[]):
     """
@@ -482,7 +478,9 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     else:
         iter_gdf = gdflist.itertuples()
     
+    idx=0
     for gdf_slice in iter_gdf:
+        idx+=1
         if isinstance(gdf_slice, tuple):
             gdf_slice=gpd.GeoDataFrame([gdf_slice],index=[gdf_slice.Index]) #.reindex_like(gdf) # only one row
             
@@ -570,7 +568,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
-        logger.info("from %s to %s : %s/%s SAFES" % (mindate , maxdate, len(safes),safes_unfiltered_count))
+        logger.info("req %s/%s from %s to %s : %s/%s SAFES" % (idx,len(gdflist),mindate , maxdate, len(safes),safes_unfiltered_count))
 
         safes_list.append(safes)
         safes_not_colocalized_list.append(safes_not_colocalized)
