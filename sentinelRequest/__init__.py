@@ -176,11 +176,9 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
         params=OrderedDict([("start" ,start ), ("rows", 100), ("q",str_query)])
         root=None
         xml_cachefile=None
-        pkl_cachefile=None
         if cachedir is not None:
             md5request=hashlib.md5(("%s" % params).encode('utf-8')).hexdigest()
             xml_cachefile=os.path.join(cachedir,"%s.xml" % md5request)
-            pkl_cachefile=os.path.join(cachedir,"%s.pkl" % md5request)
             if os.path.exists(xml_cachefile):
                 logger.debug("reading from xml cachefile %s" % xml_cachefile)
                 try:
@@ -194,8 +192,6 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
                 except Exception as e:
                     logger.warning('removing invalid xml_cachefile %s : %s' % (xml_cachefile,str(e)))
                     os.unlink(xml_cachefile)
-                    if os.path.exists(xml_cachefile):
-                        os.unlink(pkl_cachefile)
                     root=None
                 
         
@@ -241,9 +237,6 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
             count=int(root.find(".//totalResults").text)
         except:
             # there was an error in request
-            if xml_cachefile is not None:
-                os.unlink(xml_cachefile)
-            
             logger.critical("invalid request : %s" % str_query)
             break
         
@@ -255,50 +248,28 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
         #logger.debug("got %d entry starting at %d" % (len(root.findall(".//entry")),start))
         
         
-        chunk_safes = None
-        
-        if cachedir is not None:
-            if os.path.exists(pkl_cachefile):
-                logger.debug("reading from pkl cachefile %s" % pkl_cachefile)
-                try:
-                    # touch like
-                    with open(pkl_cachefile, 'a'):
-                        os.utime(pkl_cachefile, None)
-                except Exception as e:
-                    logger.warning('unable to touch %s : %s' % (pkl_cachefile , str(e) ) )
-        
-                try:        
-                    with open(pkl_cachefile,"rb") as f:
-                        chunk_safes = pickle.load(f)
-                    start+=len(chunk_safes)
-                except:
-                    logger.warning('removing invalid pkl cachefile %s' % pkl_cachefile)
-                    os.unlink(pkl_cachefile)
-        
-        if chunk_safes is None:
-            if len(root.findall(".//entry")) > 0:
-                chunk_safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint')
-                t=time.time()
-                for field in answer_fields:
-                    if field.startswith('url'):
-                        if field == 'url':
-                            elts = [ d for d in root.xpath(".//entry/link") if 'rel' not in d.attrib]
-                        else:
-                            rel = field.split('_')[1]
-                            elts = root.xpath(".//entry/link[@rel='%s']" % rel)
-                        tag='str'
+        if len(root.findall(".//entry")) > 0:
+            chunk_safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint')
+            t=time.time()
+            for field in answer_fields:
+                if field.startswith('url'):
+                    if field == 'url':
+                        elts = [ d for d in root.xpath(".//entry/link") if 'rel' not in d.attrib]
                     else:
-                        elts = root.xpath(".//entry/*[@name='%s']" % field)
-                        tag = elts[0].tag # ie str,int,date ..
-                    values = [d.text for d in elts]
-                    chunk_safes[field]=values
-                    if tag in decode_tags:
-                        chunk_safes[field] = chunk_safes[field].apply(decode_tags[tag])
-                chunk_safes['footprint'] = chunk_safes['footprint'].apply(wkt.loads)
-                start+=len(chunk_safes)
-                logger.debug("xml parsed in %.2f secs" % (time.time()-t))
+                        rel = field.split('_')[1]
+                        elts = root.xpath(".//entry/link[@rel='%s']" % rel)
+                    tag='str'
+                else:
+                    elts = root.xpath(".//entry/*[@name='%s']" % field)
+                    tag = elts[0].tag # ie str,int,date ..
+                values = [d.text for d in elts]
+                chunk_safes[field]=values
+                if tag in decode_tags:
+                    chunk_safes[field] = chunk_safes[field].apply(decode_tags[tag])
+            chunk_safes['footprint'] = chunk_safes['footprint'].apply(wkt.loads)
+            start+=len(chunk_safes)
+            logger.debug("xml parsed in %.2f secs" % (time.time()-t))
 
-        if chunk_safes is not None:
             # sort by sensing date
             safes=safes.append(chunk_safes, ignore_index=True,sort=False)
             safes=safes.sort_values('beginposition')
