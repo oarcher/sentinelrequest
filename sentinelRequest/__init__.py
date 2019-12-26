@@ -300,7 +300,7 @@ def colocalize(safes, gdf):
         intersect_safes.rename_axis(gdf.index.name,inplace=True)
         safes_coloc = safes_coloc.append(intersect_safes)        
                 
-    return safes_coloc.set_geometry('footprint')
+    return safes_coloc
 
 def remove_duplicates(safes_ori,keep_list=[]):
     """
