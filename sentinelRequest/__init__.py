@@ -150,6 +150,17 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
     
     return a geodataframe with responses
     """
+    def decode_date(strdate):
+        # date format can change ..
+        try:
+            d = datetime.datetime.strptime(strdate,dateformat)
+        except:
+            d = datetime.datetime.strptime(strdate[0:19],dateformat_alt)
+        return d
+    decode_tags = {
+        "int"   : int,
+        "date"  : decode_date
+        }
     
     retry_init = 3
     
@@ -265,54 +276,34 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
                     os.unlink(pkl_cachefile)
         
         if chunk_safes is None:
-            chunk_safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint')
             if len(root.findall(".//entry")) > 0:
+                chunk_safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint')
                 t=time.time()
-                for entry in root.findall(".//entry"):
-                    #filename=entry.find("str[@name = 'filename']").text
-                    safe={}
-                    
-                    # get all str objects
-                    for str_entry in entry.findall("str"):
-                        safe[str_entry.attrib['name']]=str_entry.text
-                    # get all int objects
-                    for int_entry in entry.findall("int"):
-                        safe[int_entry.attrib['name']]=int(int_entry.text)
-                    # get all date objects
-                    for date_entry in entry.findall("date"):
-                        try:
-                            safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text,dateformat)
-                        except ValueError:
-                            safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text[0:19],dateformat_alt)
-                        
-                    for link in entry.findall("link"):
-                        url_name='url'
-                        if 'rel' in link.attrib:
-                            url_name="%s_%s" % (url_name, link.attrib['rel'])
-                        safe[url_name]=link.attrib['href']
-    
-                    # convert fooprint to wkt. buffer(0) convert multipolygon to polygon if possible
-                    safe['footprint'] = wkt.loads(safe['footprint']).buffer(0)
-                    # append to safes
-                    chunk_safes=chunk_safes.append(safe, ignore_index=True)
-                    start+=1
+                for field in answer_fields:
+                    if field.startswith('url'):
+                        if field == 'url':
+                            elts = [ d for d in root.xpath(".//entry/link") if 'rel' not in d.attrib]
+                        else:
+                            rel = field.split('_')[1]
+                            elts = root.xpath(".//entry/link[@rel='%s']" % rel)
+                        tag='str'
+                    else:
+                        elts = root.xpath(".//entry/*[@name='%s']" % field)
+                        tag = elts[0].tag # ie str,int,date ..
+                    values = [d.text for d in elts]
+                    chunk_safes[field]=values
+                    if tag in decode_tags:
+                        chunk_safes[field] = chunk_safes[field].apply(decode_tags[tag])
+                chunk_safes['footprint'] = chunk_safes['footprint'].apply(wkt.loads)
+                start+=len(chunk_safes)
                 logger.debug("xml parsed in %.2f secs" % (time.time()-t))
-                
-                # save to pkl cachefile
-                try:        
-                    with open(pkl_cachefile,"wb") as f:
-                        pickle.dump(chunk_safes,f)
-                except Exception as e:
-                    logger.warning('Error writing pkl cachefile %s : %s' % (pkl_cachefile,str(e)))
-                    try:
-                        os.unlink(pkl_cachefile)
-                    except:
-                        pass
-        # sort by sensing date
-        safes=safes.append(chunk_safes, ignore_index=True,sort=False)
-        safes=safes.sort_values('beginposition')
-        safes.reset_index(drop=True,inplace=True)
-        safes = safes.set_geometry('footprint')
+
+        if chunk_safes is not None:
+            # sort by sensing date
+            safes=safes.append(chunk_safes, ignore_index=True,sort=False)
+            safes=safes.sort_values('beginposition')
+            safes.reset_index(drop=True,inplace=True)
+            safes = safes.set_geometry('footprint')
         #safes['footprint'] = gpd.GeoSeries(safes['footprint'])
     return safes
     
