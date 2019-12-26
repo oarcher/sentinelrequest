@@ -35,13 +35,13 @@ if __name__ == "__main__":
 
     parser.add_argument("--user",action="store",default="guest",type=str,help="scihub login")
     parser.add_argument("--password",action="store",default="guest",type=str,help="scihub password")
-    parser.add_argument("--date",action="append",default=None, nargs=1,  type=str,help="date as string. if provided 2 time, first is start, last is stop")
+    parser.add_argument("--date",action="append",default=None, nargs=1,  type=str,help="date as string (see --dateformat, or date -d). if provided 2 time, first is start, last is stop")
     parser.add_argument("--wkt",action="store",default=None, type=str,help="wkt representation of the region of interest")
     parser.add_argument("--filename",action="store",default=filename,type=str,help="filename, with joker. ex 'S1?_?W_GRD*'. default to %s" % filename)
     parser.add_argument("--query",action="store",default=None,type=str,help="""additionnal query. for exemple 'orbitdirection:ASCENDING AND polarisationmode:"VV VH"'""")
     parser.add_argument("--datatake",action="store",default=0,type=int,help="retrieve adjacents datatake (ie adjacent SAFEs). default to 0 (no datatakes)")
     parser.add_argument("--dateformat",action="store",default=dateformat,  type=str,help="strftime date format. default: %%Y-%%m-%%d %%H:%%M" )
-    parser.add_argument("--dtime",action="store",default=dtime,type=int,help="dtime in hours, if --date has only one date. default to %d" % dtime)
+    parser.add_argument("--dtime",action="store",default=dtime,type=float,help="dtime in hours, if --date has only one date. default to %d" % dtime)
     #parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
     #parser.add_argument("--ql",action="store_true",help="download quicklook")
     parser.add_argument("--cachedir",action="store",default=None,help="cache dir to speedup requests")
@@ -61,8 +61,14 @@ if __name__ == "__main__":
         logger.debug("Activating debug messages")
     date = None
     if args.date:
-        date=[ datetime.datetime.strptime(d[0],args.dateformat) for d in args.date]
-    
+        try:
+            date=[ datetime.datetime.strptime(d[0],args.dateformat) for d in args.date]
+        except:
+            import subprocess
+            try:
+                date=[ datetime.datetime.utcfromtimestamp(int(subprocess.check_output(['date','-d',d[0],'+%s']))) for d in args.date]
+            except:
+                raise ValueError("Unable to decode '%s' with format '%s' or system command 'date -d'" % (args.date, args.dateformat ))
     if args.wkt:
         geometry=wkt.loads(args.wkt)
     else:
@@ -91,8 +97,17 @@ if __name__ == "__main__":
                 args.infile, delimiter=";")
             
             df['geometry'] = df['geometry'].apply(wkt.loads)
-            df['beginposition']=df['beginposition'].apply(lambda x: datetime.datetime.strptime(x,args.dateformat))
-            df['endposition']=df['endposition'].apply(lambda x: datetime.datetime.strptime(x,args.dateformat))
+            if 'startdate' in df:
+                df.rename(columns={'startdate' : 'beginposition'},inplace=True)
+            if 'stopdate' in df:
+                df.rename(columns={'stopdate' : 'endposition'},inplace=True)
+            if date is not None and len(date) == 2:
+                logger.info("Forcing startdate -> stopdate to %s -> %s" % (date[0],date[1]))
+                df['beginposition'] = date[0]
+                df['endposition'] = date[1]
+            else:    
+                df['beginposition']=df['beginposition'].apply(lambda x: datetime.datetime.strptime(x,args.dateformat))
+                df['endposition']=df['endposition'].apply(lambda x: datetime.datetime.strptime(x,args.dateformat))
             gdf = gpd.GeoDataFrame(
                 df, geometry='geometry',
                 crs={'init': 'epsg:4326'},
