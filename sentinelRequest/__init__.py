@@ -324,25 +324,20 @@ def colocalize(safes, gdf):
     for gdf_index , gdf_item in gdf.iterrows():
         begindate=gdf_item.beginposition 
         enddate=gdf_item.endposition
-        # time coloc
-        for safe_index , safe in safes.iterrows():
-            # check for time range overlap
-            latest_start = max(safe.beginposition , begindate)
-            earliest_end = min(safe.endposition , enddate)
-            overlap = (earliest_end - latest_start)
-            
-            if overlap >= datetime.timedelta(0) : 
-                # intersection coloc
-                if getattr(safe,safes.geometry.name).intersects(getattr(gdf_item,gdf.geometry.name)):
-                    colocated = safes.loc[[safe_index]]  # one row df
-                    # set same index as rom from gdf by adding temp col
-                    colocated['__rowindex'] = gdf_index
-                    colocated.set_index('__rowindex',drop=True,inplace=True)
-                    colocated.rename_axis(gdf.index.name,inplace=True)
-                    if colocated.iloc[0]['filename'] in safes_coloc['filename']:
-                        logger.debug('here')
-                        pass
-                    safes_coloc = safes_coloc.append(colocated)
+        
+        latest_start = safes.beginposition.copy()
+        latest_start[latest_start <  begindate] = begindate
+        earliest_end = safes.endposition.copy()
+        earliest_end[earliest_end >  enddate] = enddate
+        overlap = (earliest_end - latest_start)
+        
+        timeok_safes = safes[overlap>=datetime.timedelta(0)]
+        intersect_safes = timeok_safes[timeok_safes.intersects(getattr(gdf_item,gdf.geometry.name))].copy()
+        intersect_safes['__rowindex'] = gdf_index
+        intersect_safes.set_index('__rowindex',drop=True,inplace=True)
+        intersect_safes.rename_axis(gdf.index.name,inplace=True)
+        safes_coloc = safes_coloc.append(intersect_safes)        
+                
     return safes_coloc.set_geometry('footprint')
 
 def remove_duplicates(safes_ori,keep_list=[]):
