@@ -1,6 +1,8 @@
 from __future__ import print_function
 import os,sys
 import datetime
+import time
+import pickle
 import requests
 from lxml import etree
 import logging
@@ -162,23 +164,27 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
     while start < count:
         params=OrderedDict([("start" ,start ), ("rows", 100), ("q",str_query)])
         root=None
-        cachefile=None
+        xml_cachefile=None
+        pkl_cachefile=None
         if cachedir is not None:
             md5request=hashlib.md5(("%s" % params).encode('utf-8')).hexdigest()
-            cachefile=os.path.join(cachedir,md5request)
-            if os.path.exists(cachefile):
-                logger.debug("reading from cachefile %s" % cachefile)
+            xml_cachefile=os.path.join(cachedir,"%s.xml" % md5request)
+            pkl_cachefile=os.path.join(cachedir,"%s.pkl" % md5request)
+            if os.path.exists(xml_cachefile):
+                logger.debug("reading from xml cachefile %s" % xml_cachefile)
                 try:
-                    with open(cachefile, 'a'):
-                        os.utime(cachefile, None)
+                    with open(xml_cachefile, 'a'):
+                        os.utime(xml_cachefile, None)
                 except Exception as e:
-                    logger.warning('unable to touch %s : %s' % (cachefile , str(e) ) )
+                    logger.warning('unable to touch %s : %s' % (xml_cachefile , str(e) ) )
                     
                 try:
-                    root = remove_dom(etree.parse(cachefile))
+                    root = remove_dom(etree.parse(xml_cachefile))
                 except Exception as e:
-                    logger.warning('removing invalid cachefile %s : %s' % (cachefile,str(e)))
-                    os.unlink(cachefile)
+                    logger.warning('removing invalid xml_cachefile %s : %s' % (xml_cachefile,str(e)))
+                    os.unlink(xml_cachefile)
+                    if os.path.exists(xml_cachefile):
+                        os.unlink(pkl_cachefile)
                     root=None
                 
         
@@ -199,7 +205,7 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
                 if 'Timeout occured while waiting response from server' in content:
                     retry-=1
                     logger.warning('Timeout while processing request : %s' % str_query)
-                    logger.warning('left rerty : %s' % retry)
+                    logger.warning('left retry : %s' % retry)
                     if retry == 0:
                         raise ConnectionError('Giving up')
                     continue
@@ -210,12 +216,12 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
                 logger.critical("answer is: \n %s" % content)
                 raise ValueError('scihub query error')
             
-            if cachefile is not None:
+            if xml_cachefile is not None:
                 try:
-                    with open(cachefile,'wb') as f:
+                    with open(xml_cachefile,'wb') as f:
                         f.write(etree.tostring(root, pretty_print=True))
                 except Exception as e:
-                    logger.warning('unable to write cachefile %s : %s' % (cachefile, str(e)))
+                    logger.warning('unable to write xml_cachefile %s : %s' % (xml_cachefile, str(e)))
                 
             
         
@@ -224,8 +230,8 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
             count=int(root.find(".//totalResults").text)
         except:
             # there was an error in request
-            if cachefile is not None:
-                os.unlink(cachefile)
+            if xml_cachefile is not None:
+                os.unlink(xml_cachefile)
             
             logger.critical("invalid request : %s" % str_query)
             break
@@ -237,40 +243,77 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
         logger.debug("%s" % root.find(".//subtitle").text )
         #logger.debug("got %d entry starting at %d" % (len(root.findall(".//entry")),start))
         
-        if len(root.findall(".//entry")) > 0:
-            for entry in root.findall(".//entry"):
-                #filename=entry.find("str[@name = 'filename']").text
-                safe={}
-                
-                # get all str objects
-                for str_entry in entry.findall("str"):
-                    safe[str_entry.attrib['name']]=str_entry.text
-                # get all int objects
-                for int_entry in entry.findall("int"):
-                    safe[int_entry.attrib['name']]=int(int_entry.text)
-                # get all date objects
-                for date_entry in entry.findall("date"):
-                    try:
-                        safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text,dateformat)
-                    except ValueError:
-                        safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text[0:19],dateformat_alt)
+        
+        chunk_safes = None
+        
+        if cachedir is not None:
+            if os.path.exists(pkl_cachefile):
+                logger.debug("reading from pkl cachefile %s" % pkl_cachefile)
+                try:
+                    # touch like
+                    with open(pkl_cachefile, 'a'):
+                        os.utime(pkl_cachefile, None)
+                except Exception as e:
+                    logger.warning('unable to touch %s : %s' % (pkl_cachefile , str(e) ) )
+        
+                try:        
+                    with open(pkl_cachefile,"rb") as f:
+                        chunk_safes = pickle.load(f)
+                    start+=len(chunk_safes)
+                except:
+                    logger.warning('removing invalid pkl cachefile %s' % pkl_cachefile)
+                    os.unlink(pkl_cachefile)
+        
+        if chunk_safes is None:
+            chunk_safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint')
+            if len(root.findall(".//entry")) > 0:
+                t=time.time()
+                for entry in root.findall(".//entry"):
+                    #filename=entry.find("str[@name = 'filename']").text
+                    safe={}
                     
-                for link in entry.findall("link"):
-                    url_name='url'
-                    if 'rel' in link.attrib:
-                        url_name="%s_%s" % (url_name, link.attrib['rel'])
-                    safe[url_name]=link.attrib['href']
-
-                # convert fooprint to wkt. buffer(0) convert multipolygon to polygon if possible
-                safe['footprint'] = wkt.loads(safe['footprint']).buffer(0)
-                # append to safes
-                safes=safes.append(safe, ignore_index=True)
-                start+=1
-            # sort by sensing date
-            safes=safes.sort_values('beginposition')
-            safes.reset_index(drop=True,inplace=True)
-            safes = safes.set_geometry('footprint')
-            #safes['footprint'] = gpd.GeoSeries(safes['footprint'])
+                    # get all str objects
+                    for str_entry in entry.findall("str"):
+                        safe[str_entry.attrib['name']]=str_entry.text
+                    # get all int objects
+                    for int_entry in entry.findall("int"):
+                        safe[int_entry.attrib['name']]=int(int_entry.text)
+                    # get all date objects
+                    for date_entry in entry.findall("date"):
+                        try:
+                            safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text,dateformat)
+                        except ValueError:
+                            safe[date_entry.attrib['name']]=datetime.datetime.strptime(date_entry.text[0:19],dateformat_alt)
+                        
+                    for link in entry.findall("link"):
+                        url_name='url'
+                        if 'rel' in link.attrib:
+                            url_name="%s_%s" % (url_name, link.attrib['rel'])
+                        safe[url_name]=link.attrib['href']
+    
+                    # convert fooprint to wkt. buffer(0) convert multipolygon to polygon if possible
+                    safe['footprint'] = wkt.loads(safe['footprint']).buffer(0)
+                    # append to safes
+                    chunk_safes=chunk_safes.append(safe, ignore_index=True)
+                    start+=1
+                logger.debug("xml parsed in %.2f secs" % (time.time()-t))
+                
+                # save to pkl cachefile
+                try:        
+                    with open(pkl_cachefile,"wb") as f:
+                        pickle.dump(chunk_safes,f)
+                except Exception as e:
+                    logger.warning('Error writing pkl cachefile %s : %s' % (pkl_cachefile,str(e)))
+                    try:
+                        os.unlink(pkl_cachefile)
+                    except:
+                        pass
+        # sort by sensing date
+        safes=safes.append(chunk_safes, ignore_index=True,sort=False)
+        safes=safes.sort_values('beginposition')
+        safes.reset_index(drop=True,inplace=True)
+        safes = safes.set_geometry('footprint')
+        #safes['footprint'] = gpd.GeoSeries(safes['footprint'])
     return safes
     
     
@@ -533,13 +576,14 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         str_query = ' AND '.join(q)
         logger.debug("query: %s" % str_query)
         
+        t=time.time()
         safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=_cachedir)
         safes_unfiltered_count = len(safes_unfiltered)
-        logger.debug("requested safes from scihub : %s" % safes_unfiltered_count)
+        logger.debug("requested safes from scihub : %s (%.2f secs)" % (safes_unfiltered_count,time.time()-t))
         
-        
+        t=time.time()
         safes=colocalize(safes_unfiltered, gdf_slice)
-        logger.debug("colocated with user query : %s" % len(safes))
+        logger.debug("colocated with user query : %s (%.2f secs)" % (len(safes),time.time()-t))
         
         safes_not_colocalized = safes_unfiltered[~safes_unfiltered['filename'].isin(safes['filename'])]
         del safes_unfiltered
