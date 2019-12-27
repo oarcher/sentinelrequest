@@ -13,8 +13,9 @@ import geopandas as gpd
 import pandas as pd
 import shapely.wkt as wkt
 import shapely.ops as ops 
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import MultiPolygon, Polygon, LineString, box
 from shapely.geometry.collection import GeometryCollection
+from shapely.ops import transform
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -50,7 +51,10 @@ urlapi='https://scihub.copernicus.eu/apihub/search'
 # earth as multi poly
 earth = MultiPolygon(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
 # valid coords
-plan_map=wkt.loads("POLYGON ((-180 -90, -180 90, 180 90, 180 -90, -180 -90))")
+#plan_map=wkt.loads("POLYGON ((-180 -90, -180 90, 180 90, 180 -90, -180 -90))")
+plan_map=box(-180,-90,180,90)
+plan_east=box(-180,-90,0,90)
+plan_west=box(0,-90,180,90)
 
 #download_scihub_url={  # %s : uuid
 #    "main" : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/$value",
@@ -111,25 +115,45 @@ def shape180(lon,lat):
 
     return tuple([(orig_type)(lon) ,lat])
 
+def no_wrap(shape):
+    """
+    scihub return footprints that not conform to epsg 4326, ie it may cross antimeridian, 
+    but epsg 4326 will make it to wrap around full earth.
+    This function will return shape in range 0 360 if lon cross antimeridian (ie +/-lon != abs(lon )
+    Warning: this only works for small shapes (ie dlon < 180)
+    
+    Result should be fed to split_boundaries.
+    """
+    
+    lon = shape.exterior.xy[0]
+    if max(abs(min(lon)),abs(max(lon))) > 90:
+        # no greenwich
+        if min(lon) < 0 < max(lon):
+            # lon sign change : antimeridian
+            shape = transform(lambda lon, lat: (lon%360, lat), shape)
+    
+    return shape
+
 def split_boundaries(shape):
     """
     A map is a plane representation of a sphere, so a shape can be outside the map, but on the sphere. 
     ie lon=-181 is outside the map -180 -> 180 
-    split_boundaries return a polygon collection from a polygon that are all on the map
+    split_boundaries return a polygon collection from a polygon that are all on the map.
+    
+    it also handle big shapes : schub choose the smallest shape to have lon bounds < 180. this function 
+    split the big shape in smaller shape.
     """
     
-    from shapely.ops import transform
-    from shapely.geometry import MultiPolygon
     try:
         # shape is a multi shape
         shapes_list = list(shape)
     except TypeError:
         shapes_list = [shape]
-    
+        
     shapes_split_in = []
     shapes_split_out = []
     shapes_non_overlap = []
-    for s in shapes_list:   
+    for s in shapes_list:           
         if s.overlaps(plan_map):
             logger.debug("shape %s is outside the map" % shape)
             shape_in=s.intersection(plan_map)
@@ -141,7 +165,26 @@ def split_boundaries(shape):
             shapes_non_overlap.append(s)
 
     shape=ops.cascaded_union(shapes_split_in + shapes_split_out + shapes_non_overlap)
-    return shape
+    
+    # split shape if dlon > 170
+    try:
+        # shape is a multi shape
+        shapes_list = list(shape)
+    except TypeError:
+        shapes_list = [shape]
+    small_shapes = []
+    for s in shapes_list:
+        bounds = s.bounds
+        dlon = bounds[2]-bounds[0]
+        if dlon > 170:
+            logger.debug("large dlon %.0f shape needs to be splitted" % dlon)
+            small_shapes.extend([s.intersection(plan_east),s.intersection(plan_west)])
+        else:
+            small_shapes.append(s)
+    if len(small_shapes) == 1:
+        return small_shapes[0]
+    else:
+        return MultiPolygon(small_shapes)
 
 def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
@@ -397,12 +440,14 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         norm_gdf=gdf.copy()
     else:
         norm_gdf = gpd.GeoDataFrame({
-            'beginposition' : None,
-            'endposition' : None,
+            'beginposition' : startdate,
+            'endposition' : stopdate,
             'geometry' : Polygon()
             },geometry='geometry',index=[0])
         # no slicing
         timedelta_slice = None
+        
+    norm_gdf.geometry = norm_gdf.geometry.apply(split_boundaries)
     
     if date in norm_gdf:
         if (startdate not in norm_gdf) and (stopdate not in norm_gdf):
@@ -553,6 +598,9 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         str_query = ' AND '.join(q)
         logger.debug("query: %s" % str_query)
         
+        
+        # todo : if len(str_query) > 8000 (https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI#Discover_the_products_over_a_pre)
+        
         t=time.time()
         safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=cachedir,cacherefreshrecent=cacherefreshrecent)
         safes_unfiltered_count = len(safes_unfiltered)
@@ -616,29 +664,29 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         ax = fig.add_subplot(111)
         handles = []
         if gdf is not None:
-            gdf.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
+            gdf.geometry.apply(split_boundaries).plot(ax=ax, color='none' , edgecolor='green',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
         if all_shapes_list:
             gdf_sel=gpd.GeoDataFrame({'geometry':all_shapes_list})
-            gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=3)
+            gdf_sel.geometry.plot(ax=ax,color='none',edgecolor='red',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
         
         if len(safes_not_colocalized) > 0 : 
-            safes_not_colocalized.plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+            safes_not_colocalized.geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
             handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             
         if len(safes) > 0:
             if 'datatake_index' in safes:
-                safes[safes['datatake_index'] == 0].plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
-                safes[safes['datatake_index'] != 0].plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
+                safes[safes['datatake_index'] == 0].geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+                safes[safes['datatake_index'] != 0].geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
             else:
-                safes.plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+                safes.geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
             
             handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
 
             if min_sea_percent is not None and len(safes_sea_nok) > 0:
-                safes_sea_nok.plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
+                safes_sea_nok.geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
         continents.plot(ax=ax,zorder=0,color='none',edgecolor='black')
