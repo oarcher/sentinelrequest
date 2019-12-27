@@ -266,7 +266,8 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
                 chunk_safes[field]=values
                 if tag in decode_tags:
                     chunk_safes[field] = chunk_safes[field].apply(decode_tags[tag])
-            chunk_safes['footprint'] = chunk_safes['footprint'].apply(wkt.loads)
+            chunk_safes['footprint'] = chunk_safes['footprint'].apply(wkt.loads).buffer(0)
+            
             start+=len(chunk_safes)
             logger.debug("xml parsed in %.2f secs" % (time.time()-t))
 
