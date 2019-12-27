@@ -7,7 +7,7 @@ import logging
 import argparse
 
 from sentinelRequest import scihubQuery
-from sentinelRequest import  logger
+from sentinelRequest import  logger,answer_fields
 import geopandas as gpd
 import shapely.wkt as wkt
 from shapely.geometry import Polygon
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     #parser.add_argument("--ql",action="store_true",help="download quicklook")
     parser.add_argument("--cachedir",action="store",default=None,help="cache dir to speedup requests")
     parser.add_argument("--cacherefreshrecent",action="store",default=7,type=int,help="ignore cache if date is more recent than n days ago")
-    parser.add_argument("--cols",action="store",default="filename",type=str,help="field output, comma separated. for ex --cols=index,filename. An error will show all available fields.")
+    parser.add_argument("--cols",action="store",default="filename",type=str,help="field output, comma separated. for ex --cols=index,filename. An unknown cols will show all available fields. 'index' is a special column name for index")
     parser.add_argument("--infile",action="store",default=None,type=str,help="infile (ie .csv, .gpkg, .shp ...)")
     parser.add_argument("--infile_format",action="store",default=None,type=str,help="infile format. default from file ext. see driver option in geopandas.to_file")
     parser.add_argument("--outfile",action="store",default=None,type=str,help="outfile (ie .csv, .gpkg, .shp ...)")
@@ -60,6 +60,18 @@ if __name__ == "__main__":
     if sys.gettrace():
         logger.setLevel(logging.DEBUG)
         logger.debug("Activating debug messages")
+    
+    cols=args.cols.split(',')
+    
+    unknown_cols = list(set(cols)-set(answer_fields + ['index']))
+    if unknown_cols:
+        logger.info("Known cols : %s" % (['index'] + answer_fields))
+        logger.error("Unknown cols : %s" % unknown_cols)
+        sys.exit(1)
+        
+    if (args.outfile is not None) and ('footprint' not in cols):
+        logger.error('--outfile currently only support GIS format. Please add footprint to cols, ie --cols=%s,footprint' % args.cols)
+        sys.exit(1)
     date = None
     if args.date:
         try:
@@ -133,7 +145,6 @@ if __name__ == "__main__":
     
     result=scihubQuery(gdf=gdf,dtime=datetime.timedelta(hours=args.dtime),filename=args.filename,query=query,datatake=args.datatake,user=args.user,password=args.password,fig=fig,cachedir=args.cachedir,cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
     
-    cols=args.cols.split(',')
     if 'index' in cols:
         result['index'] = result.index
     
