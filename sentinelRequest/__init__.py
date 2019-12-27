@@ -143,13 +143,14 @@ def split_boundaries(shape):
     shape=ops.cascaded_union(shapes_split_in + shapes_split_out + shapes_non_overlap)
     return shape
 
-def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
+def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
     real scihub query, as done on https://scihub.copernicus.eu/dhus/#/home
     but with cache handling
     
     return a geodataframe with responses
     """
+    
     def decode_date(strdate):
         # date format can change ..
         try:
@@ -271,11 +272,20 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None):
             start+=len(chunk_safes)
             logger.debug("xml parsed in %.2f secs" % (time.time()-t))
 
+            # remove cachefile if some safes are recents
+            if xml_cachefile is not None and os.path.exists(xml_cachefile):
+                dateage=(datetime.datetime.utcnow() - chunk_safes['beginposition'].max()) # used for cache age
+                if dateage < cacherefreshrecent:
+                    logger.debug("To recent answer. Removing cachefile %s" % xml_cachefile)
+                    os.unlink(xml_cachefile)
             # sort by sensing date
             safes=safes.append(chunk_safes, ignore_index=True,sort=False)
             safes=safes.sort_values('beginposition')
             safes.reset_index(drop=True,inplace=True)
             safes = safes.set_geometry('footprint')
+            
+            
+            
         #safes['footprint'] = gpd.GeoSeries(safes['footprint'])
     return safes
     
@@ -342,13 +352,13 @@ def remove_duplicates(safes_ori,keep_list=[]):
         safes.drop('__filename_radic',axis=1,inplace=True)
     return safes
 
-def get_datatakes(safes, datatake=0, user='guest', password='guest', cachedir=None):
+def get_datatakes(safes, datatake=0, user='guest', password='guest', cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     safes['datatake_index'] = 0
     for safe in list(safes['filename']):
         safe_index = safes[safes['filename'] == safe].index[0]
         takeid=safe.split('_')[-2]
         safe_rad="_".join(safe.split('_')[0:4])
-        safes_datatake=scihubQuery_raw('filename:%s_*_*_*_%s_*' % (safe_rad, takeid),user=user,password=password,cachedir=cachedir)
+        safes_datatake=scihubQuery_raw('filename:%s_*_*_*_%s_*' % (safe_rad, takeid),user=user,password=password,cachedir=cachedir,cacherefreshrecent=cacherefreshrecent)
         #FIXME duplicate are removed, even if duplicate=True 
         safes_datatake = remove_duplicates(safes_datatake,keep_list=[safe])
         
@@ -507,22 +517,13 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         q=[]
         footprint=""
         datePosition=""
-        dateage = datetime.timedelta(weeks=100000) # old date age  per default too allow caching if no dates provided
-            
-            
+
         # get min/max date
         mindate = gdf_slice['beginposition'].min()
         maxdate = gdf_slice['endposition'].max()
         if (mindate == mindate) and (maxdate == maxdate): # non nan
-            dateage=(datetime.datetime.utcnow() - maxdate) # used for cache age
             datePosition="beginPosition:[%s TO %s]" % (mindate.strftime(dateformat) , maxdate.strftime(dateformat) ) # shorter request . endPosition is just few seconds in future
             q.append(datePosition)
-        
-        if dateage < cacherefreshrecent:
-            logger.debug("recent request. disabling cache")
-            _cachedir = None
-        else:
-            _cachedir = cachedir
                 
         q.append("filename:%s" % filename)
         
@@ -553,7 +554,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         logger.debug("query: %s" % str_query)
         
         t=time.time()
-        safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=_cachedir)
+        safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=cachedir,cacherefreshrecent=cacherefreshrecent)
         safes_unfiltered_count = len(safes_unfiltered)
         logger.debug("requested safes from scihub : %s (%.2f secs)" % (safes_unfiltered_count,time.time()-t))
         
@@ -580,7 +581,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         if datatake != 0:
             logger.debug("Asking for same datatakes")
             nsafes = len(safes)
-            safes = get_datatakes(safes, datatake=datatake, user=user,password=password,cachedir=_cachedir)
+            safes = get_datatakes(safes, datatake=datatake, user=user,password=password,cachedir=cachedir,cacherefreshrecent=cacherefreshrecent)
             logger.debug("added %s datatakes" % (len(safes)-nsafes))
                 
         if not duplicate:
