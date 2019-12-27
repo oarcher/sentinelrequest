@@ -10,6 +10,7 @@ from sentinelRequest import scihubQuery
 from sentinelRequest import  logger
 import geopandas as gpd
 import shapely.wkt as wkt
+from shapely.geometry import Polygon
 
 #logging.basicConfig()
 #logger = logging.getLogger(os.path.basename(__file__))
@@ -72,7 +73,7 @@ if __name__ == "__main__":
     if args.wkt:
         geometry=wkt.loads(args.wkt)
     else:
-        geometry=None
+        geometry=Polygon()
     try:
         query=args.query
     except:
@@ -116,7 +117,9 @@ if __name__ == "__main__":
                 gdf.set_index('index',inplace=True)
         else:
             gdf = gpd.read_file(args.infile,driver=args.infile_format)
-    else:        
+    else:    
+        if date is None or len(date) == 0:
+            date = [None,None]    
         gdf = gpd.GeoDataFrame({
             "beginposition" : date[0],
             "endposition"   : date[1],
@@ -128,7 +131,7 @@ if __name__ == "__main__":
         import matplotlib.pyplot as plt
         fig = plt.figure(figsize=(10,7))
     
-    result=scihubQuery(gdf,dtime=datetime.timedelta(hours=args.dtime),filename=args.filename,query=query,datatake=args.datatake,user=args.user,password=args.password,fig=fig,cachedir=args.cachedir,cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
+    result=scihubQuery(gdf=gdf,dtime=datetime.timedelta(hours=args.dtime),filename=args.filename,query=query,datatake=args.datatake,user=args.user,password=args.password,fig=fig,cachedir=args.cachedir,cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
     
     cols=args.cols.split(',')
     if 'index' in cols:

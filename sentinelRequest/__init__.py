@@ -13,7 +13,7 @@ import geopandas as gpd
 import pandas as pd
 import shapely.wkt as wkt
 import shapely.ops as ops 
-from shapely.geometry import MultiPolygon
+from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry.collection import GeometryCollection
 
 logging.basicConfig()
@@ -288,14 +288,21 @@ def colocalize(safes, gdf):
         begindate=gdf_item.beginposition 
         enddate=gdf_item.endposition
         
-        latest_start = safes.beginposition.copy()
-        latest_start[latest_start <  begindate] = begindate
-        earliest_end = safes.endposition.copy()
-        earliest_end[earliest_end >  enddate] = enddate
-        overlap = (earliest_end - latest_start)
+        if (begindate is not None) and  (enddate is not None):
         
-        timeok_safes = safes[overlap>=datetime.timedelta(0)]
-        intersect_safes = timeok_safes[timeok_safes.intersects(getattr(gdf_item,gdf.geometry.name))].copy()
+            latest_start = safes.beginposition.copy()
+            latest_start[latest_start <  begindate] = begindate
+            earliest_end = safes.endposition.copy()
+            earliest_end[earliest_end >  enddate] = enddate
+            overlap = (earliest_end - latest_start)
+            
+            timeok_safes = safes[overlap>=datetime.timedelta(0)]
+        else:
+            timeok_safes = safes
+        if not getattr(gdf_item,gdf.geometry.name).is_empty:
+            intersect_safes = timeok_safes[timeok_safes.intersects(getattr(gdf_item,gdf.geometry.name))].copy()
+        else:
+            intersect_safes = timeok_safes.copy()
         intersect_safes['__rowindex'] = gdf_index
         intersect_safes.set_index('__rowindex',drop=True,inplace=True)
         intersect_safes.rename_axis(gdf.index.name,inplace=True)
@@ -376,8 +383,16 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     """ return a normalized gdf list 
     start/stop date name will be 'beginposition' and 'endposition'
     """
-    norm_gdf=gdf.copy()
-    gdf_slices = []
+    if gdf is not None:
+        norm_gdf=gdf.copy()
+    else:
+        norm_gdf = gpd.GeoDataFrame({
+            'beginposition' : None,
+            'endposition' : None,
+            'geometry' : Polygon()
+            },geometry='geometry',index=[0])
+        # no slicing
+        timedelta_slice = None
     
     if date in norm_gdf:
         if (startdate not in norm_gdf) and (stopdate not in norm_gdf):
@@ -392,36 +407,37 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     if (stopdate in norm_gdf) and (stopdate != 'endposition'):
         norm_gdf['endposition'] = norm_gdf[stopdate]
         
-        
+    gdf_slices = norm_gdf         
     # slice
     if timedelta_slice is not None:
         mindate=norm_gdf['beginposition'].min()
         maxdate=norm_gdf['endposition'].max()
-        slice_begin = mindate
-        slice_end = slice_begin
-        while slice_end <= maxdate:
-            slice_end = slice_begin + timedelta_slice
-            # this is time grouping
-            gdf_slice=norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ]
-            for to_expand in list(set(norm_gdf.index) - set(gdf_slice.index)):
-                # missings index in gdf_slice.
-                # check if there is time overlap.
-                latest_start = max(norm_gdf.loc[to_expand].beginposition , slice_begin)
-                earliest_end = min(norm_gdf.loc[to_expand].endposition , slice_end)
-                overlap = (earliest_end - latest_start)
-                if overlap >= datetime.timedelta(0) :
-                    logger.debug("Slicing time for %s : %s to %s" % (to_expand,latest_start,earliest_end))
-                    gdf_slice=gdf_slice.append(norm_gdf.loc[to_expand])
-                    gdf_slice.loc[to_expand,'beginposition'] = latest_start
-                    gdf_slice.loc[to_expand,'endposition'] = earliest_end
-                else:
-                    logger.debug("no time slice for %s in range %s to %s" % (to_expand,slice_begin,slice_end))
-                    
-            if not gdf_slice.empty: 
-                gdf_slices.append(gdf_slice)
-            slice_begin = slice_end
-    else:
-        gdf_slices = norm_gdf 
+        if (mindate == mindate) and (maxdate == maxdate): # non nan
+            gdf_slices = []
+            slice_begin = mindate
+            slice_end = slice_begin
+            while slice_end <= maxdate:
+                slice_end = slice_begin + timedelta_slice
+                # this is time grouping
+                gdf_slice=norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ]
+                for to_expand in list(set(norm_gdf.index) - set(gdf_slice.index)):
+                    # missings index in gdf_slice.
+                    # check if there is time overlap.
+                    latest_start = max(norm_gdf.loc[to_expand].beginposition , slice_begin)
+                    earliest_end = min(norm_gdf.loc[to_expand].endposition , slice_end)
+                    overlap = (earliest_end - latest_start)
+                    if overlap >= datetime.timedelta(0) :
+                        logger.debug("Slicing time for %s : %s to %s" % (to_expand,latest_start,earliest_end))
+                        gdf_slice=gdf_slice.append(norm_gdf.loc[to_expand])
+                        gdf_slice.loc[to_expand,'beginposition'] = latest_start
+                        gdf_slice.loc[to_expand,'endposition'] = earliest_end
+                    else:
+                        logger.debug("no time slice for %s in range %s to %s" % (to_expand,slice_begin,slice_end))
+                        
+                if not gdf_slice.empty: 
+                    gdf_slices.append(gdf_slice)
+                slice_begin = slice_end
+        
     
     return gdf_slices
 
@@ -497,7 +513,10 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         # get min/max date
         mindate = gdf_slice['beginposition'].min()
         maxdate = gdf_slice['endposition'].max()
-        dateage=(datetime.datetime.utcnow() - maxdate) # used for cache age
+        if (mindate == mindate) and (maxdate == maxdate): # non nan
+            dateage=(datetime.datetime.utcnow() - maxdate) # used for cache age
+            datePosition="beginPosition:[%s TO %s]" % (mindate.strftime(dateformat) , maxdate.strftime(dateformat) ) # shorter request . endPosition is just few seconds in future
+            q.append(datePosition)
         
         if dateage < cacherefreshrecent:
             logger.debug("recent request. disabling cache")
@@ -505,9 +524,6 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         else:
             _cachedir = cachedir
                 
-        datePosition="beginPosition:[%s TO %s]" % (mindate.strftime(dateformat) , maxdate.strftime(dateformat) ) # shorter request . endPosition is just few seconds in future
-        q.append(datePosition)
-            
         q.append("filename:%s" % filename)
         
         if query:
@@ -518,19 +534,21 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             shape = GeometryCollection(list(gdf_slice.geometry))
         else:
             shape = ops.cascaded_union(gdf_slice.geometry) # will return the unique geometry of the unique ow
+
+        if not shape.is_empty:        
+            # scihub request shape is less complex then user shape
+            shape = shape.buffer(2.0)
+            shape = shape.simplify(1.9)        
+            #round the shape
+            shape=wkt.loads(wkt.dumps(shape,rounding_precision=rounding_precision))    
+            shape=split_boundaries(shape)
+            wkt_shape=wkt.dumps(shape,rounding_precision=rounding_precision)
         
-        # scihub request shape is less complex then user shape
-        shape = shape.buffer(2.0)
-        shape = shape.simplify(1.9)        
-        #round the shape
-        shape=wkt.loads(wkt.dumps(shape,rounding_precision=rounding_precision))    
-        shape=split_boundaries(shape)
-        wkt_shape=wkt.dumps(shape,rounding_precision=rounding_precision)
+            all_shapes_list.append(shape)
         
-        all_shapes_list.append(shape)
-        
-        footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
-        q.append(footprint)
+            footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
+            q.append(footprint)
+            
         str_query = ' AND '.join(q)
         logger.debug("query: %s" % str_query)
         
@@ -539,9 +557,15 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         safes_unfiltered_count = len(safes_unfiltered)
         logger.debug("requested safes from scihub : %s (%.2f secs)" % (safes_unfiltered_count,time.time()-t))
         
-        t=time.time()
-        safes=colocalize(safes_unfiltered, gdf_slice)
-        logger.debug("colocated with user query : %s (%.2f secs)" % (len(safes),time.time()-t))
+        if gdf is not None:
+            t=time.time()
+            safes=colocalize(safes_unfiltered, gdf_slice)
+            logger.debug("colocated with user query : %s (%.2f secs)" % (len(safes),time.time()-t))
+        else:
+            safes=safes_unfiltered.copy()
+            safes['__rowindex'] = 0
+            safes.set_index('__rowindex',drop=True,inplace=True)
+            safes.rename_axis('',inplace=True)
         
         safes_not_colocalized = safes_unfiltered[~safes_unfiltered['filename'].isin(safes['filename'])]
         del safes_unfiltered
@@ -590,8 +614,9 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         import matplotlib as mpl
         ax = fig.add_subplot(111)
         handles = []
-        gdf.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
-        handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
+        if gdf is not None:
+            gdf.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
+            handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
         if all_shapes_list:
             gdf_sel=gpd.GeoDataFrame({'geometry':all_shapes_list})
             gdf_sel.plot(ax=ax,color='none',edgecolor='red',zorder=3)
@@ -619,8 +644,11 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         #bounds = safes.unary_union.buffer(5).bounds
         #if not bounds:
         bounds = GeometryCollection(all_shapes_list).buffer(5).bounds
-        ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
-        ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
+        if not bounds:
+            bounds = safes.unary_union.buffer(5).bounds
+        if bounds:
+            ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
+            ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
                     
         fig.tight_layout()
         box = ax.get_position()
