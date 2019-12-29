@@ -126,3 +126,16 @@ dmypy.json
 .project
 .pydevproject
 
+/credential.pkl
+/out.csv
+/out.gpkg
+/prepare_request_download_4_angelina_phd_eddies_in_ice.ipynb
+/test.csv
+/test.gpkg
+/test.py
+/test1.csv
+tmp/
+.idea/
+tmp*
+*tmp
+/conda_setup.sh
