@@ -272,10 +272,11 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
                         rel = field.split('_')[1]
                         elts = root.xpath(".//entry/link[@rel='%s']" % rel)
                     tag='str'
+                    values = [d.attrib['href'] for d in elts]
                 else:
                     elts = root.xpath(".//entry/*[@name='%s']" % field)
                     tag = elts[0].tag # ie str,int,date ..
-                values = [d.text for d in elts]
+                    values = [d.text for d in elts]
                 chunk_safes[field]=values
                 if tag in decode_tags:
                     chunk_safes[field] = chunk_safes[field].apply(decode_tags[tag])
