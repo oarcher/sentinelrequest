@@ -15,7 +15,7 @@ import shapely.wkt as wkt
 import shapely.ops as ops 
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, LineString, box
 from shapely.ops import transform
-from unittest.mock import inplace
+import math 
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -175,7 +175,7 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
     
     retry_init = 3
     
-    safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint')
+    safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint',crs = {'init': 'epsg:4326'})
     start=0
     count=1 # arbitrary count > start
     retry=retry_init
@@ -431,6 +431,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     """ return a normalized gdf list 
     start/stop date name will be 'beginposition' and 'endposition'
     """
+    t = time.time()
     if gdf is not None:
         if not gdf.index.is_unique:
             raise IndexError("Index must be unique. Duplicate founds : %s" % list(gdf.index[gdf.index.duplicated(keep=False)].unique()))
@@ -441,10 +442,16 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             'beginposition' : startdate,
             'endposition' : stopdate,
             'geometry' : Polygon()
-            },geometry='geometry',index=[0])
+            },geometry='geometry',index=[0],crs={'init': 'epsg:4326'})
         # no slicing
         timedelta_slice = None
-      
+    
+    if norm_gdf.crs is None:
+        logger.warning('no crs provided. assuming 4326')
+        norm_gdf.crs = {'init': 'epsg:4326'}
+    
+    norm_gdf = norm_gdf.to_crs({'init': 'epsg:4326'})
+    
     norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
     east,west = zip(*norm_gdf.geometry.apply(split_east_west))
     norm_gdf['geometry_east'] = list(east)
@@ -474,7 +481,11 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             gdf_slices = []
             slice_begin = mindate
             slice_end = slice_begin
+            islice = 0
+            nslices = math.ceil((maxdate-mindate) / timedelta_slice)
+            logger.info("Slicing into %d chunks of %s ..." % (nslices, timedelta_slice))
             while slice_end <= maxdate:
+                islice+=1
                 slice_end = slice_begin + timedelta_slice
                 # this is time grouping
                 gdf_slice=norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ]
@@ -485,18 +496,18 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
                     earliest_end = min(norm_gdf.loc[to_expand].endposition , slice_end)
                     overlap = (earliest_end - latest_start)
                     if overlap >= datetime.timedelta(0) :
-                        logger.debug("Slicing time for %s : %s to %s" % (to_expand,latest_start,earliest_end))
+                        #logger.debug("Slicing time for %s : %s to %s" % (to_expand,latest_start,earliest_end))
                         gdf_slice=gdf_slice.append(norm_gdf.loc[to_expand])
                         gdf_slice.loc[to_expand,'beginposition'] = latest_start
                         gdf_slice.loc[to_expand,'endposition'] = earliest_end
-                    else:
-                        logger.debug("no time slice for %s in range %s to %s" % (to_expand,slice_begin,slice_end))
-                        
+                    #else:
+                        #logger.debug("no time slice for %s in range %s to %s" % (to_expand,slice_begin,slice_end))
+                logger.debug("Slice {islice:3d} : {ngeoms:3d} geometries".format(islice=islice,ngeoms=len(gdf_slice)))           
                 if not gdf_slice.empty: 
                     gdf_slices.append(gdf_slice)
                 slice_begin = slice_end
         
-    
+            logger.info('Slicing done in %.1fs . %d/%d non empty slices.' % (time.time()-t, len(gdf_slices), nslices  ))    
     return gdf_slices
 
 def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
@@ -539,11 +550,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     return :
         a geodataframe with safes from scihub, colocated with input gdf (ie same index)
     """
-    t=time.time()
     gdflist= normalize_gdf(gdf,startdate=startdate,stopdate=stopdate,date=date,dtime=dtime,timedelta_slice=timedelta_slice)
-    elapsed_norm = time.time() - t
-    if elapsed_norm > 10:
-        logger.info("Time slicing done in %.0f secs" % (elapsed_norm))
     safes_list = []  # final request
     safes_not_colocalized_list = [] # raw request
     safes_sea_ok_list = []
@@ -670,8 +677,12 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
-        logger.info("Req %02d/%02d : %03d/%03d SAFES -> %04d colocs. Times : req %02.1fs, coloc %02.1fs" % 
-                    (idx,len(gdflist), len(safes['filename'].unique()),safes_unfiltered_count,len(safes['filename']),elapsed_request,elapsed_coloc))
+        logger.info("Req {ireq:3d}/{nreq:3d} ( {ngeoms:3d} geometries ) : {nsafes_ok:3d}/{nsafes:3d} SAFES -> {ncoloc:4d} colocs. Times : req {treq:2.1f}s, coloc {tcoloc:2.1f}s".format(
+                    ngeoms = len(gdf_slice),
+                    ireq=idx,nreq=len(gdflist), nsafes_ok=len(safes['filename'].unique()),
+                    nsafes=safes_unfiltered_count,ncoloc=len(safes['filename']),
+                    treq=elapsed_request,tcoloc=elapsed_coloc)
+            )
 
         safes_list.append(safes)
         safes_not_colocalized_list.append(safes_not_colocalized)
