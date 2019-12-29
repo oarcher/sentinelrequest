@@ -13,9 +13,9 @@ import geopandas as gpd
 import pandas as pd
 import shapely.wkt as wkt
 import shapely.ops as ops 
-from shapely.geometry import MultiPolygon, Polygon, LineString, box
-from shapely.geometry.collection import GeometryCollection
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, LineString, box
 from shapely.ops import transform
+from unittest.mock import inplace
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -27,9 +27,9 @@ if sys.gettrace():
 else:
     logger.setLevel(logging.INFO)
 
-#all wkt objects feeded to scihub will keep rounding_precision digits (2 = 0.01 )
+#all wkt objects feeded to scihub will keep rounding_precision digits (1 = 0.1 )
 #this will allow to not have too long requests
-rounding_precision=2
+rounding_precision=1
 
 
 answer_fields=[u'acquisitiontype', u'beginposition', u'endposition', u'filename',
@@ -47,6 +47,7 @@ dateformat="%Y-%m-%dT%H:%M:%S.%fZ"
 dateformat_alt="%Y-%m-%dT%H:%M:%S"
 
 urlapi='https://scihub.copernicus.eu/apihub/search'
+#urlapi='https://scihub.copernicus.eu/dhus/search'
 
 # earth as multi poly
 earth = MultiPolygon(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
@@ -55,6 +56,8 @@ earth = MultiPolygon(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowr
 plan_map=box(-180,-90,180,90)
 plan_east=box(-180,-90,0,90)
 plan_west=box(0,-90,180,90)
+plan_east1=box(180,-90,360,90)
+plan_west1=box(-180,-90,-360,90)
 
 #download_scihub_url={  # %s : uuid
 #    "main" : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/$value",
@@ -115,76 +118,40 @@ def shape180(lon,lat):
 
     return tuple([(orig_type)(lon) ,lat])
 
-def no_wrap(shape):
+def split_east_west(shape):
     """
-    scihub return footprints that not conform to epsg 4326, ie it may cross antimeridian, 
-    but epsg 4326 will make it to wrap around full earth.
-    This function will return shape in range 0 360 if lon cross antimeridian (ie +/-lon != abs(lon )
-    Warning: this only works for small shapes (ie dlon < 180)
-    
-    Result should be fed to split_boundaries.
+        given a shape in range -360 360, return a tuple (shape_east,shape_west)
     """
+    shapes_east_list = []
+    shapes_west_list = []
     
-    lon = shape.exterior.xy[0]
-    if max(abs(min(lon)),abs(max(lon))) > 90:
-        # no greenwich
-        if min(lon) < 0 < max(lon):
-            # lon sign change : antimeridian
-            shape = transform(lambda lon, lat: (lon%360, lat), shape)
+    if not hasattr(shape,'__iter__'):
+        shape=[shape]
+    
+    for s in shape:
+        shapes_east = [ transform(shape180,s.intersection(east)) for east in [plan_east,plan_east1] ]
+        shapes_west = [ transform(shape180,s.intersection(west)) for west in [plan_west,plan_west1] ]
+        shapes_east_list.extend(shapes_east)
+        shapes_west_list.extend(shapes_west)
+        
+    shapes_east_list = list(filter(lambda s : not s.is_empty , shapes_east_list))
+    shapes_west_list = list(filter(lambda s : not s.is_empty , shapes_west_list))
+        
+    shape_east = ops.cascaded_union(shapes_east_list)
+    shape_west = ops.cascaded_union(shapes_west_list)
+    
+    return (shape_east,shape_west)
+
+def smallest_dlon(shape):
+    if not hasattr(shape,'__iter__'):
+        # only translate pure polygone
+        dlon = shape.bounds[2]-shape.bounds[0]
+        if dlon > 180:
+            logger.debug("large dlon %.0f converted  to short for shape %s" % (dlon,shape))
+            return transform(lambda lon, lat: (lon%360, lat), shape)
     
     return shape
-
-def split_boundaries(shape):
-    """
-    A map is a plane representation of a sphere, so a shape can be outside the map, but on the sphere. 
-    ie lon=-181 is outside the map -180 -> 180 
-    split_boundaries return a polygon collection from a polygon that are all on the map.
     
-    it also handle big shapes : schub choose the smallest shape to have lon bounds < 180. this function 
-    split the big shape in smaller shape.
-    """
-    
-    try:
-        # shape is a multi shape
-        shapes_list = list(shape)
-    except TypeError:
-        shapes_list = [shape]
-        
-    shapes_split_in = []
-    shapes_split_out = []
-    shapes_non_overlap = []
-    for s in shapes_list:           
-        if s.overlaps(plan_map):
-            logger.debug("shape %s is outside the map" % shape)
-            shape_in=s.intersection(plan_map)
-            shape_out=s.difference(plan_map)
-            shape_out=transform(shape180, shape_out)
-            shapes_split_in.append(shape_in)
-            shapes_split_out.append(shape_out)
-        else:
-            shapes_non_overlap.append(s)
-
-    shape=ops.cascaded_union(shapes_split_in + shapes_split_out + shapes_non_overlap)
-    
-    # split shape if dlon > 170
-    try:
-        # shape is a multi shape
-        shapes_list = list(shape)
-    except TypeError:
-        shapes_list = [shape]
-    small_shapes = []
-    for s in shapes_list:
-        bounds = s.bounds
-        dlon = bounds[2]-bounds[0]
-        if dlon > 170:
-            logger.debug("large dlon %.0f shape needs to be splitted" % dlon)
-            small_shapes.extend([s.intersection(plan_east),s.intersection(plan_west)])
-        else:
-            small_shapes.append(s)
-    if len(small_shapes) == 1:
-        return small_shapes[0]
-    else:
-        return MultiPolygon(small_shapes)
 
 def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
     """
@@ -282,6 +249,8 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
         except:
             # there was an error in request
             logger.critical("invalid request : %s" % str_query)
+            if xml_cachefile is not None and os.path.exists(xml_cachefile):
+                os.unlink(xml_cachefile)
             break
         
         # reset retry since last request is ok
@@ -334,8 +303,23 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
     
     
 def colocalize(safes, gdf):
-    """colocalize safes and gdf"""
+    """colocalize safes and gdf
+    if 'geometry_east' and 'geometry_west' exists in gdf,
+    they will be used instead of .geometry (scihub mode)
+    """
+    gdf  = gdf.copy()
+    gdf['geometry'] = gdf.geometry
+    
     safes_coloc = safes.iloc[0:0,:].copy()
+    
+    scihub_mode = False
+    
+    if 'geometry_east' in gdf and 'geometry_west' in gdf:
+        scihub_mode = True
+        # remove unused geometry
+        old_geometry = gdf.geometry.name
+        gdf.set_geometry('geometry_east',inplace=True)
+        gdf.drop(labels=[old_geometry],inplace=True,axis=1)
     
     for gdf_index , gdf_item in gdf.iterrows():
         begindate=gdf_item.beginposition 
@@ -352,10 +336,20 @@ def colocalize(safes, gdf):
             timeok_safes = safes[overlap>=datetime.timedelta(0)]
         else:
             timeok_safes = safes
-        if not getattr(gdf_item,gdf.geometry.name).is_empty:
-            intersect_safes = timeok_safes[timeok_safes.intersects(getattr(gdf_item,gdf.geometry.name))].copy()
+            
+            
+            
+        if 'geometry' in gdf_item:
+            intersect_safes = timeok_safes[timeok_safes.intersects(gdf_item['geometry'])].copy()
+        elif scihub_mode:
+            intersect_safes = pd.concat([
+                timeok_safes[timeok_safes.intersects(gdf_item['geometry_east'])].copy(),
+                timeok_safes[timeok_safes.intersects(gdf_item['geometry_west'])].copy()
+                ])
         else:
+            # if the user gave no geometry
             intersect_safes = timeok_safes.copy()
+            
         intersect_safes['__rowindex'] = gdf_index
         intersect_safes.set_index('__rowindex',drop=True,inplace=True)
         intersect_safes.rename_axis(gdf.index.name,inplace=True)
@@ -388,7 +382,7 @@ def remove_duplicates(safes_ori,keep_list=[]):
                     if _to_keep != to_keep:
                         logger.warning('remove_duplicate : force keep safe %s' % force_keep[0])
                         to_keep = _to_keep
-                logger.debug("only keep : %s " % [ f for f in safes[safes['ingestiondate'] == to_keep]['filename'] ])
+                logger.debug("only keep : %s " % set([ f for f in safes[safes['ingestiondate'] == to_keep]['filename'] ]))
                 safes = safes[ (safes['ingestiondate'] == to_keep ) | (safes['__filename_radic'] != filename_radic)]
                 
                 
@@ -432,11 +426,14 @@ def get_datatakes(safes, datatake=0, user='guest', password='guest', cachedir=No
         safes = safes.append(safes_datatake)
     return safes
     
-def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1)):
+def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),smallest_geometry=True):
     """ return a normalized gdf list 
     start/stop date name will be 'beginposition' and 'endposition'
     """
     if gdf is not None:
+        if not gdf.index.is_unique:
+            raise IndexError("Index must be unique. Duplicate founds : %s" % list(gdf.index[gdf.index.duplicated(keep=False)].unique()))
+            
         norm_gdf=gdf.copy()
     else:
         norm_gdf = gpd.GeoDataFrame({
@@ -446,8 +443,13 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             },geometry='geometry',index=[0])
         # no slicing
         timedelta_slice = None
-        
-    norm_gdf.geometry = norm_gdf.geometry.apply(split_boundaries)
+      
+    norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
+    east,west = zip(*norm_gdf.geometry.apply(split_east_west))
+    norm_gdf['geometry_east'] = list(east)
+    norm_gdf['geometry_west'] = list(west)
+    
+    #norm_gdf.geometry = norm_gdf.geometry.apply(split_boundaries)
     
     if date in norm_gdf:
         if (startdate not in norm_gdf) and (stopdate not in norm_gdf):
@@ -536,13 +538,17 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     return :
         a geodataframe with safes from scihub, colocated with input gdf (ie same index)
     """
-    
+    t=time.time()
     gdflist= normalize_gdf(gdf,startdate=startdate,stopdate=stopdate,date=date,dtime=dtime,timedelta_slice=timedelta_slice)
+    elapsed_norm = time.time() - t
+    if elapsed_norm > 10:
+        logger.info("Time slicing done in %.0f secs" % (elapsed_norm))
     safes_list = []  # final request
     safes_not_colocalized_list = [] # raw request
     safes_sea_ok_list = []
     safes_sea_nok_list = []
-    all_shapes_list = []
+    scihub_shapes = []
+    user_shapes = []
     
     # decide if loop is over dataframe or over rows
     if isinstance(gdflist, list):
@@ -575,41 +581,61 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         if query:
             q.append("(%s)" % query)
         
-        # get geometry enveloppe
-        if timedelta_slice is not None:
-            shape = GeometryCollection(list(gdf_slice.geometry))
-        else:
-            shape = ops.cascaded_union(gdf_slice.geometry) # will return the unique geometry of the unique ow
+        shape_east_list = list(filter(bool , gdf_slice['geometry_east']))
+        shape_west_list = list(filter(bool , gdf_slice['geometry_west']))
 
-        if not shape.is_empty:        
-            # scihub request shape is less complex then user shape
-            shape = shape.buffer(2.0)
-            shape = shape.simplify(1.9)        
-            #round the shape
-            shape=wkt.loads(wkt.dumps(shape,rounding_precision=rounding_precision))    
-            shape=split_boundaries(shape)
-            wkt_shape=wkt.dumps(shape,rounding_precision=rounding_precision)
+        shape_east = Polygon()
+        shape_west = Polygon()
+
+        if shape_east_list:
+            shape_east = ops.cascaded_union(gdf_slice['geometry_east'])
+        if shape_west_list:
+            shape_west = ops.cascaded_union(gdf_slice['geometry_west'])
+
         
-            all_shapes_list.append(shape)
+        wkt_shapes = []
+
+        for shape,plan in zip([shape_east,shape_west],[plan_east,plan_west]):
+            if not shape.is_empty:
+                user_shapes.extend(shape_west_list+shape_east_list)
+                # scihub request shape is less complex then user shape
+                scihub_shape = shape.buffer(2)
+                scihub_shape = scihub_shape.simplify(1.9)
+                       
+                #round the shape
+                scihub_shape=wkt.loads(wkt.dumps(scihub_shape,rounding_precision=rounding_precision))
+               
+                # ensure valid coords
+                scihub_shape = scihub_shape.intersection(plan) 
+                
+                
+                wkt_shapes.append(wkt.dumps(scihub_shape,rounding_precision=rounding_precision))
+            
+                scihub_shapes.append(scihub_shape)
         
-            footprint='(footprint:\"Intersects(%s)\" )' % wkt_shape
-            q.append(footprint)
+        footprints=['footprint:\"Intersects(%s)\" ' % wkt_shape  for wkt_shape in wkt_shapes ]
+        
+        q.append('(%s)' % ' OR '.join(footprints))
             
         str_query = ' AND '.join(q)
         logger.debug("query: %s" % str_query)
         
+        if len(str_query) > 8000:
+            raise ValueError('to long query')
         
         # todo : if len(str_query) > 8000 (https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI#Discover_the_products_over_a_pre)
         
         t=time.time()
         safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=cachedir,cacherefreshrecent=cacherefreshrecent)
+        elapsed_request = time.time()-t
         safes_unfiltered_count = len(safes_unfiltered)
-        logger.debug("requested safes from scihub : %s (%.2f secs)" % (safes_unfiltered_count,time.time()-t))
+        logger.debug("requested safes from scihub : %s (%.2f secs)" % (safes_unfiltered_count,elapsed_request))
         
         if gdf is not None:
             t=time.time()
             safes=colocalize(safes_unfiltered, gdf_slice)
-            logger.debug("colocated with user query : %s (%.2f secs)" % (len(safes),time.time()-t))
+            elapsed_coloc = time.time()-t
+            logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes),elapsed_coloc))
         else:
             safes=safes_unfiltered.copy()
             safes['__rowindex'] = 0
@@ -643,7 +669,8 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
-        logger.info("req %s/%s from %s to %s : %s/%s SAFES" % (idx,len(gdflist),mindate , maxdate, len(safes),safes_unfiltered_count))
+        logger.info("Req %02d/%02d : %03d/%03d SAFES -> %04d colocs. Times : req %02.1fs, coloc %02.1fs" % 
+                    (idx,len(gdflist), len(safes['filename'].unique()),safes_unfiltered_count,len(safes['filename']),elapsed_request,elapsed_coloc))
 
         safes_list.append(safes)
         safes_not_colocalized_list.append(safes_not_colocalized)
@@ -658,43 +685,46 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
         safes_sea_nok = pd.concat(safes_sea_nok_list,sort=False)
     
+    logger.info("Total : %s SAFES (%s uniques)" % (len(safes),len(safes['filename'].unique())))
+    
     if fig is not None:
+        uniques_safes = safes.drop_duplicates('filename')
         import matplotlib.pyplot as plt
         import matplotlib as mpl
         ax = fig.add_subplot(111)
         handles = []
         if gdf is not None:
-            gdf.geometry.apply(split_boundaries).plot(ax=ax, color='none' , edgecolor='green',zorder=3)
+            gdf_sel=gpd.GeoDataFrame({'geometry':user_shapes})
+            gdf_sel.geometry.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
-        if all_shapes_list:
-            gdf_sel=gpd.GeoDataFrame({'geometry':all_shapes_list})
+        if scihub_shapes:
+            gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes})
             gdf_sel.geometry.plot(ax=ax,color='none',edgecolor='red',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
         
         if len(safes_not_colocalized) > 0 : 
-            safes_not_colocalized.geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+            safes_not_colocalized.geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
             handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             
-        if len(safes) > 0:
-            if 'datatake_index' in safes:
-                safes[safes['datatake_index'] == 0].geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
-                safes[safes['datatake_index'] != 0].geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
+        if len(uniques_safes) > 0:
+            if 'datatake_index' in uniques_safes:
+                uniques_safes[uniques_safes['datatake_index'] == 0].geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+                uniques_safes[uniques_safes['datatake_index'] != 0].geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
             else:
-                safes.geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+                uniques_safes.geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
             
             handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
 
             if min_sea_percent is not None and len(safes_sea_nok) > 0:
-                safes_sea_nok.geometry.apply(no_wrap).apply(split_boundaries).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
+                safes_sea_nok.geometry.apply(smallest_dlon).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
         continents.plot(ax=ax,zorder=0,color='none',edgecolor='black')
-        #bounds = safes.unary_union.buffer(5).bounds
-        #if not bounds:
-        bounds = GeometryCollection(all_shapes_list).buffer(5).bounds
+        bounds = GeometryCollection(scihub_shapes).buffer(5).bounds
         if not bounds:
-            bounds = safes.unary_union.buffer(5).bounds
+            bounds = safes.unary_union.buffer(10).bounds
+            
         if bounds:
             ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
             ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
