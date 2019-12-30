@@ -131,29 +131,22 @@ def split_east_west(shape):
     for s in shape:
         shapes_east = []
         shapes_west = []
-        for east in [plan_east,plan_east1]:
-            try:
-                shapes_east.append(transform(shape180,s.intersection(east)))
-            except Exception as e:
-                logger.warning("converting to shape180 : %s" % (str(e)))
-        for west in [plan_west,plan_west1]:
-            try:
-                shapes_west.append(transform(shape180,s.intersection(west)))
-            except Exception as e:
-                logger.warning("converting to shape180 : %s" % (str(e)))
+        shapes_east = [ transform(shape180,s.intersection(east)) for east in [plan_east,plan_east1] ]
+        shapes_west = [ transform(shape180,s.intersection(west)) for west in [plan_west,plan_west1] ]
         shapes_east_list.extend(shapes_east)
         shapes_west_list.extend(shapes_west)
         
     shapes_east_list = list(filter(lambda s : not s.is_empty , shapes_east_list))
     shapes_west_list = list(filter(lambda s : not s.is_empty , shapes_west_list))
-        
+            
     shape_east = ops.cascaded_union(shapes_east_list)
     shape_west = ops.cascaded_union(shapes_west_list)
+    
     
     return (shape_east,shape_west)
 
 def smallest_dlon(shape):
-    if not hasattr(shape,'__iter__'):
+    if not shape.is_empty and not hasattr(shape,'__iter__'):
         # only translate pure polygone
         dlon = shape.bounds[2]-shape.bounds[0]
         if dlon > 180:
@@ -325,7 +318,7 @@ def colocalize(safes, gdf, crs={'init': 'epsg:4326'}):
     gdf['geometry'] = gdf.geometry
     
     safes_coloc = safes.iloc[0:0,:].copy()
-    
+    safes_coloc.crs = {'init' : 'epsg:4326' }
     scihub_mode = False
     
     if crs['init'] == 'epsg:4326' and 'geometry_east' in gdf and 'geometry_west' in gdf:
@@ -501,7 +494,8 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             slice_end = slice_begin
             islice = 0
             nslices = math.ceil((maxdate-mindate) / timedelta_slice)
-            logger.info("Slicing into %d chunks of %s ..." % (nslices, timedelta_slice))
+            if nslices > 1:
+                logger.info("Slicing into %d chunks of %s ..." % (nslices, timedelta_slice))
             while slice_end <= maxdate:
                 islice+=1
                 slice_end = slice_begin + timedelta_slice
@@ -525,7 +519,8 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
                     gdf_slices.append(gdf_slice)
                 slice_begin = slice_end
         
-            logger.info('Slicing done in %.1fs . %d/%d non empty slices.' % (time.time()-t, len(gdf_slices), nslices  ))    
+            if nslices > 1:
+                logger.info('Slicing done in %.1fs . %d/%d non empty slices.' % (time.time()-t, len(gdf_slices), nslices  ))    
     return gdf_slices
 
 def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
@@ -647,7 +642,8 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         
         footprints=['footprint:\"Intersects(%s)\" ' % wkt_shape  for wkt_shape in wkt_shapes ]
         
-        q.append('(%s)' % ' OR '.join(footprints))
+        if footprints:
+            q.append('(%s)' % ' OR '.join(footprints))
             
         str_query = ' AND '.join(q)
         logger.debug("query: %s" % str_query)
@@ -663,6 +659,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         safes_unfiltered_count = len(safes_unfiltered)
         logger.debug("requested safes from scihub : %s (%.2f secs)" % (safes_unfiltered_count,elapsed_request))
         
+        elapsed_coloc = 0
         if gdf is not None:
             t=time.time()
             safes=colocalize(safes_unfiltered, gdf_slice, crs = crs)
@@ -701,12 +698,18 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
-        logger.info("Req {ireq:3d}/{nreq:3d} ( {ngeoms:3d} shapes ) : {nsafes_ok:3d}/{nsafes:3d} SAFES -> {ncoloc:4d} colocs ({crs}). Times : req {treq:2.1f}s, coloc {tcoloc:2.1f}s".format(
-                    ngeoms = len(gdf_slice),
-                    ireq=idx,nreq=len(gdflist), nsafes_ok=len(safes['filename'].unique()),
-                    nsafes=safes_unfiltered_count,ncoloc=len(safes['filename']),
-                    treq=elapsed_request,tcoloc=elapsed_coloc,crs=crs['init'])
-            )
+        if gdf is not None:
+            time_str = ""
+            if elapsed_request > 2 or elapsed_coloc > 2:
+                time_str = " Times : req {treq:2.1f}s".format(treq=elapsed_request)
+                if elapsed_coloc > 2:
+                    time_str +=", coloc {tcoloc:2.1f}s".format(tcoloc=elapsed_coloc,)
+            logger.info("Req {ireq:3d}/{nreq:3d} ( {chunk_size:3d} items ) : {nsafes_ok:3d}/{nsafes:3d} SAFES -> {ncoloc:4d} colocs ({crs}). {time_str}".format(
+                        chunk_size = len(gdf_slice),
+                        ireq=idx,nreq=len(gdflist), nsafes_ok=len(safes['filename'].unique()),
+                        nsafes=safes_unfiltered_count,ncoloc=len(safes['filename']),
+                        crs=crs['init'], time_str=time_str)
+                )
 
         safes_list.append(safes)
         safes_not_colocalized_list.append(safes_not_colocalized)
