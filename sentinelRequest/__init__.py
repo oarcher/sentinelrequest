@@ -274,7 +274,7 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
         
         
         if len(root.findall(".//entry")) > 0:
-            chunk_safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint')
+            chunk_safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint',crs=scihub_crs)
             t=time.time()
             for field in answer_fields:
                 if field.startswith('url'):
@@ -312,15 +312,18 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
             
             
         #safes['footprint'] = gpd.GeoSeries(safes['footprint'])
+        safes.crs = scihub_crs
     return safes
     
     
 def colocalize(safes, gdf, crs=scihub_crs):
     """colocalize safes and gdf
-    if crs is 'epsg:4326' and 'geometry_east' and 'geometry_west' exists in gdf,
+    if crs is default and 'geometry_east' and 'geometry_west' exists in gdf,
     they will be used instead of .geometry (scihub mode)
     
-    if crs is not 'epsg:4326' the crs will be used on .geometry for the coloc.
+    if crs is not default the crs will be used on .geometry for the coloc.
+    
+    the returned safes will be returned in scihub crs (ie 4326 : not the user specified)
     """
     
     gdf  = gdf.copy()
@@ -329,6 +332,8 @@ def colocalize(safes, gdf, crs=scihub_crs):
     safes_coloc = safes.iloc[0:0,:].copy()
     safes_coloc.crs = {'init' : 'epsg:4326' }
     scihub_mode = False
+    
+    safes_crs = safes.copy()
     
     if crs['init'] == 'epsg:4326' and 'geometry_east' in gdf and 'geometry_west' in gdf:
         scihub_mode = True
@@ -339,7 +344,7 @@ def colocalize(safes, gdf, crs=scihub_crs):
     elif crs['init'] != 'epsg:4326':
         gdf.set_geometry('geometry',inplace=True)
         gdf.to_crs(crs,inplace=True)
-        safes.to_crs(crs,inplace=True)
+        safes_crs.to_crs(crs,inplace=True)
         safes_coloc.to_crs(crs,inplace=True)
         
     for gdf_index , gdf_item in gdf.iterrows():
@@ -348,15 +353,15 @@ def colocalize(safes, gdf, crs=scihub_crs):
         
         if (begindate is not None) and  (enddate is not None):
         
-            latest_start = safes.beginposition.copy()
+            latest_start = safes_crs.beginposition.copy()
             latest_start[latest_start <  begindate] = begindate
-            earliest_end = safes.endposition.copy()
+            earliest_end = safes_crs.endposition.copy()
             earliest_end[earliest_end >  enddate] = enddate
             overlap = (earliest_end - latest_start)
             
-            timeok_safes = safes[overlap>=datetime.timedelta(0)]
+            timeok_safes = safes_crs[overlap>=datetime.timedelta(0)]
         else:
-            timeok_safes = safes
+            timeok_safes = safes_crs
             
             
             
@@ -376,7 +381,7 @@ def colocalize(safes, gdf, crs=scihub_crs):
         intersect_safes.rename_axis(gdf.index.name,inplace=True)
         safes_coloc = safes_coloc.append(intersect_safes)        
                 
-    return safes_coloc.to_crs(scihub_crs)
+    return safes_coloc.to_crs(crs=scihub_crs)
 
 def remove_duplicates(safes_ori,keep_list=[]):
     """
@@ -470,7 +475,18 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         logger.warning('no crs provided. assuming lon/lat')
         norm_gdf.crs = scihub_crs
     
+    # check valid input geometry
+    if not all(norm_gdf.is_valid):
+        raise ValueError("Invalid geometries found. Check them with gdf.is_valid")
+    
     norm_gdf = norm_gdf.to_crs(scihub_crs)
+    
+    # check valid input geometry
+    if not all(norm_gdf.is_valid):
+        all_count = len(norm_gdf)
+        norm_gdf = norm_gdf[norm_gdf.is_valid]
+        valid_cound = len(norm_gdf)
+        logging.error("Dropped %d/%d geometries that cannot be converted to %s" % (all_count - valid_cound,all_count,scihub_crs['init']))
     
     norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
     east,west = zip(*norm_gdf.geometry.apply(split_east_west))
@@ -753,7 +769,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
         
         if len(safes_not_colocalized) > 0 : 
-            safes_not_colocalized.to_crs(crs=crs).buffer(0).geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+            safes_not_colocalized.geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
             handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             
         if len(uniques_safes) > 0:
