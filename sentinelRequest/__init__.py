@@ -122,6 +122,11 @@ def split_east_west(shape):
     """
         given a shape in range -360 360, return a tuple (shape_east,shape_west)
     """
+    
+    if not shape.is_valid:
+        logger.warning('invalid geometry corrected by buffer(0)')
+        shape=shape.buffer(0)
+    
     shapes_east_list = []
     shapes_west_list = []
     
@@ -704,11 +709,11 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 time_str = " Times : req {treq:2.1f}s".format(treq=elapsed_request)
                 if elapsed_coloc > 2:
                     time_str +=", coloc {tcoloc:2.1f}s".format(tcoloc=elapsed_coloc,)
-            logger.info("Req {ireq:3d}/{nreq:3d} ( {chunk_size:3d} items ) : {nsafes_ok:3d}/{nsafes:3d} SAFES -> {ncoloc:4d} colocs ({crs}). {time_str}".format(
+            logger.info("Req {ireq:3d}/{nreq:3d} ( {chunk_size:3d} items ) : {nsafes_ok:3d}/{nsafes:3d} SAFES -> {ncoloc:4d} colocs. {time_str}".format(
                         chunk_size = len(gdf_slice),
                         ireq=idx,nreq=len(gdflist), nsafes_ok=len(safes['filename'].unique()),
                         nsafes=safes_unfiltered_count,ncoloc=len(safes['filename']),
-                        crs=crs['init'], time_str=time_str)
+                        time_str=time_str)
                 )
 
         safes_list.append(safes)
@@ -724,7 +729,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
         safes_sea_nok = pd.concat(safes_sea_nok_list,sort=False)
     
-    logger.info("Total : %s SAFES (%s uniques)" % (len(safes),len(safes['filename'].unique())))
+    logger.info("Total : %s SAFES colocated with %s (%s uniques)." % (len(safes),crs['init'],len(safes['filename'].unique())))
     
     if fig is not None:
         uniques_safes = safes.drop_duplicates('filename')
