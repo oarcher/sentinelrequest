@@ -59,6 +59,10 @@ plan_west=box(0,-90,180,90)
 plan_east1=box(180,-90,360,90)
 plan_west1=box(-180,-90,-360,90)
 
+
+# projection used by scihub
+scihub_crs = {'init': 'epsg:4326'}
+
 #download_scihub_url={  # %s : uuid
 #    "main" : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/$value",
 #    "alt"  : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/",
@@ -183,7 +187,7 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
     
     retry_init = 3
     
-    safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint',crs = {'init': 'epsg:4326'})
+    safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint',crs = scihub_crs)
     start=0
     count=1 # arbitrary count > start
     retry=retry_init
@@ -311,7 +315,7 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
     return safes
     
     
-def colocalize(safes, gdf, crs={'init': 'epsg:4326'}):
+def colocalize(safes, gdf, crs=scihub_crs):
     """colocalize safes and gdf
     if crs is 'epsg:4326' and 'geometry_east' and 'geometry_west' exists in gdf,
     they will be used instead of .geometry (scihub mode)
@@ -372,7 +376,7 @@ def colocalize(safes, gdf, crs={'init': 'epsg:4326'}):
         intersect_safes.rename_axis(gdf.index.name,inplace=True)
         safes_coloc = safes_coloc.append(intersect_safes)        
                 
-    return safes_coloc.to_crs({'init': 'epsg:4326'})
+    return safes_coloc.to_crs(scihub_crs)
 
 def remove_duplicates(safes_ori,keep_list=[]):
     """
@@ -458,15 +462,15 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             'beginposition' : startdate,
             'endposition' : stopdate,
             'geometry' : Polygon()
-            },geometry='geometry',index=[0],crs={'init': 'epsg:4326'})
+            },geometry='geometry',index=[0],crs=scihub_crs)
         # no slicing
         timedelta_slice = None
     
     if norm_gdf.crs is None:
-        logger.warning('no crs provided. assuming 4326')
-        norm_gdf.crs = {'init': 'epsg:4326'}
+        logger.warning('no crs provided. assuming lon/lat')
+        norm_gdf.crs = scihub_crs
     
-    norm_gdf = norm_gdf.to_crs({'init': 'epsg:4326'})
+    norm_gdf = norm_gdf.to_crs(scihub_crs)
     
     norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
     east,west = zip(*norm_gdf.geometry.apply(split_east_west))
@@ -578,7 +582,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     
     # user crs will be used for coloc
     if gdf is None or gdf.crs is None:
-        crs={'init': 'epsg:4326'}
+        crs=scihub_crs
     else:
         crs=gdf.crs
     
@@ -738,44 +742,48 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         ax = fig.add_subplot(111)
         handles = []
         if gdf is not None:
-            gdf_sel=gpd.GeoDataFrame({'geometry':user_shapes})
-            gdf_sel.geometry.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
+            gdf_sel=gpd.GeoDataFrame({'geometry':user_shapes},crs=scihub_crs)
+            gdf_sel.to_crs(crs=crs,inplace=True)
+            gdf_sel.geometry.buffer(0).plot(ax=ax, color='none' , edgecolor='green',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
         if scihub_shapes:
-            gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes})
-            gdf_sel.geometry.plot(ax=ax,color='none',edgecolor='red',zorder=3)
+            gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes},crs=scihub_crs)
+            gdf_sel.to_crs(crs=crs,inplace=True)
+            gdf_sel.geometry.buffer(0).plot(ax=ax,color='none',edgecolor='red',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
         
         if len(safes_not_colocalized) > 0 : 
-            safes_not_colocalized.geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+            safes_not_colocalized.to_crs(crs=crs).buffer(0).geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
             handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             
         if len(uniques_safes) > 0:
             if 'datatake_index' in uniques_safes:
-                uniques_safes[uniques_safes['datatake_index'] == 0].geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
-                uniques_safes[uniques_safes['datatake_index'] != 0].geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
+                uniques_safes[uniques_safes['datatake_index'] == 0].geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+                uniques_safes[uniques_safes['datatake_index'] != 0].geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
             else:
-                uniques_safes.geometry.apply(smallest_dlon).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+                uniques_safes.geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
             
             handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
 
             if min_sea_percent is not None and len(safes_sea_nok) > 0:
-                safes_sea_nok.geometry.apply(smallest_dlon).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
+                safes_sea_nok.geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-        continents.plot(ax=ax,zorder=0,color='none',edgecolor='black')
-        bounds = GeometryCollection(scihub_shapes).buffer(5).bounds
-        if not bounds:
-            bounds = safes.unary_union.buffer(10).bounds
-            
-        if bounds:
-            ax.set_ylim([max(-90,bounds[1]),min(90,bounds[3])])
-            ax.set_xlim([max(-180,bounds[0]),min(180,bounds[2])])
-                    
+        continents.to_crs(crs=crs).plot(ax=ax,zorder=0,color='gray',alpha=0.2)
+        #bounds = gpd.GeoDataFrame({'geometry': [box(*uniques_safes.total_bounds)]},crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
+        bounds = uniques_safes.to_crs(crs=crs).buffer(0).total_bounds
+        if bounds is None:
+            #bounds = gpd.GeoDataFrame({'geometry': [ops.cascaded_union(scihub_shapes)]},crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
+            gpd.GeoDataFrame({'geometry': [ops.cascaded_union(scihub_shapes)]},crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
+        if bounds is not None:
+            xmin,xmax = ax.get_xlim()
+            ymin,ymax = ax.get_ylim()
+            ax.set_ylim([max(ymin,bounds[1]),min(ymax,bounds[3])])
+            ax.set_xlim([max(xmin,bounds[0]),min(xmax,bounds[2])])
         fig.tight_layout()
-        box = ax.get_position()
-        ax.set_position([box.x0, box.y0 , box.width , box.height * 0.8])
+        bbox = ax.get_position()
+        ax.set_position([bbox.x0, bbox.y0 , bbox.width , bbox.height * 0.8])
         
         ax.legend(handles=handles,loc='lower center', bbox_to_anchor=(0.5, 1.05),ncol=5)
           
