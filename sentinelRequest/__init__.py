@@ -129,8 +129,18 @@ def split_east_west(shape):
         shape=[shape]
     
     for s in shape:
-        shapes_east = [ transform(shape180,s.intersection(east)) for east in [plan_east,plan_east1] ]
-        shapes_west = [ transform(shape180,s.intersection(west)) for west in [plan_west,plan_west1] ]
+        shapes_east = []
+        shapes_west = []
+        for east in [plan_east,plan_east1]:
+            try:
+                shapes_east.append(transform(shape180,s.intersection(east)))
+            except Exception as e:
+                logger.warning("converting to shape180 : %s" % (str(e)))
+        for west in [plan_west,plan_west1]:
+            try:
+                shapes_west.append(transform(shape180,s.intersection(west)))
+            except Exception as e:
+                logger.warning("converting to shape180 : %s" % (str(e)))
         shapes_east_list.extend(shapes_east)
         shapes_west_list.extend(shapes_west)
         
@@ -303,11 +313,14 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
     return safes
     
     
-def colocalize(safes, gdf):
+def colocalize(safes, gdf, crs={'init': 'epsg:4326'}):
     """colocalize safes and gdf
-    if 'geometry_east' and 'geometry_west' exists in gdf,
+    if crs is 'epsg:4326' and 'geometry_east' and 'geometry_west' exists in gdf,
     they will be used instead of .geometry (scihub mode)
+    
+    if crs is not 'epsg:4326' the crs will be used on .geometry for the coloc.
     """
+    
     gdf  = gdf.copy()
     gdf['geometry'] = gdf.geometry
     
@@ -315,13 +328,18 @@ def colocalize(safes, gdf):
     
     scihub_mode = False
     
-    if 'geometry_east' in gdf and 'geometry_west' in gdf:
+    if crs['init'] == 'epsg:4326' and 'geometry_east' in gdf and 'geometry_west' in gdf:
         scihub_mode = True
         # remove unused geometry
         old_geometry = gdf.geometry.name
         gdf.set_geometry('geometry_east',inplace=True)
         gdf.drop(labels=[old_geometry],inplace=True,axis=1)
-    
+    elif crs['init'] != 'epsg:4326':
+        gdf.set_geometry('geometry',inplace=True)
+        gdf.to_crs(crs,inplace=True)
+        safes.to_crs(crs,inplace=True)
+        safes_coloc.to_crs(crs,inplace=True)
+        
     for gdf_index , gdf_item in gdf.iterrows():
         begindate=gdf_item.beginposition 
         enddate=gdf_item.endposition
@@ -356,7 +374,7 @@ def colocalize(safes, gdf):
         intersect_safes.rename_axis(gdf.index.name,inplace=True)
         safes_coloc = safes_coloc.append(intersect_safes)        
                 
-    return safes_coloc
+    return safes_coloc.to_crs({'init': 'epsg:4326'})
 
 def remove_duplicates(safes_ori,keep_list=[]):
     """
@@ -558,6 +576,12 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     scihub_shapes = []
     user_shapes = []
     
+    # user crs will be used for coloc
+    if gdf is None or gdf.crs is None:
+        crs={'init': 'epsg:4326'}
+    else:
+        crs=gdf.crs
+    
     # decide if loop is over dataframe or over rows
     if isinstance(gdflist, list):
         iter_gdf = gdflist
@@ -641,7 +665,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         
         if gdf is not None:
             t=time.time()
-            safes=colocalize(safes_unfiltered, gdf_slice)
+            safes=colocalize(safes_unfiltered, gdf_slice, crs = crs)
             elapsed_coloc = time.time()-t
             logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes),elapsed_coloc))
         else:
@@ -677,11 +701,11 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
-        logger.info("Req {ireq:3d}/{nreq:3d} ( {ngeoms:3d} geometries ) : {nsafes_ok:3d}/{nsafes:3d} SAFES -> {ncoloc:4d} colocs. Times : req {treq:2.1f}s, coloc {tcoloc:2.1f}s".format(
+        logger.info("Req {ireq:3d}/{nreq:3d} ( {ngeoms:3d} shapes ) : {nsafes_ok:3d}/{nsafes:3d} SAFES -> {ncoloc:4d} colocs ({crs}). Times : req {treq:2.1f}s, coloc {tcoloc:2.1f}s".format(
                     ngeoms = len(gdf_slice),
                     ireq=idx,nreq=len(gdflist), nsafes_ok=len(safes['filename'].unique()),
                     nsafes=safes_unfiltered_count,ncoloc=len(safes['filename']),
-                    treq=elapsed_request,tcoloc=elapsed_coloc)
+                    treq=elapsed_request,tcoloc=elapsed_coloc,crs=crs['init'])
             )
 
         safes_list.append(safes)
