@@ -127,6 +127,8 @@ def split_east_west(shape):
         given a shape in range -360 360, return a tuple (shape_east,shape_west)
     """
     
+    area = shape.area
+    
     if not shape.is_valid:
         logger.warning('invalid geometry corrected by buffer(0)')
         shape=shape.buffer(0)
@@ -145,8 +147,8 @@ def split_east_west(shape):
         shapes_east_list.extend(shapes_east)
         shapes_west_list.extend(shapes_west)
         
-    shapes_east_list = list(filter(lambda s : not s.is_empty , shapes_east_list))
-    shapes_west_list = list(filter(lambda s : not s.is_empty , shapes_west_list))
+    shapes_east_list = list(filter(lambda s : not s.is_empty and (s.area > 0 or area == 0 ), shapes_east_list))
+    shapes_west_list = list(filter(lambda s : not s.is_empty and (s.area > 0 or area == 0 ), shapes_west_list))
             
     shape_east = ops.cascaded_union(shapes_east_list)
     shape_west = ops.cascaded_union(shapes_west_list)
@@ -760,7 +762,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         if gdf is not None:
             gdf_sel=gpd.GeoDataFrame({'geometry':user_shapes},crs=scihub_crs)
             gdf_sel.to_crs(crs=crs,inplace=True)
-            gdf_sel.geometry.buffer(0).plot(ax=ax, color='none' , edgecolor='green',zorder=3)
+            gdf_sel.geometry.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
             handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
         if scihub_shapes:
             gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes},crs=scihub_crs)
@@ -787,11 +789,11 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
         continents.to_crs(crs=crs).plot(ax=ax,zorder=0,color='gray',alpha=0.2)
-        #bounds = gpd.GeoDataFrame({'geometry': [box(*uniques_safes.total_bounds)]},crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
-        bounds = uniques_safes.to_crs(crs=crs).buffer(0).total_bounds
-        if bounds is None:
-            #bounds = gpd.GeoDataFrame({'geometry': [ops.cascaded_union(scihub_shapes)]},crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
-            gpd.GeoDataFrame({'geometry': [ops.cascaded_union(scihub_shapes)]},crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
+        
+        bounds = gpd.GeoDataFrame({'geometry': 
+                                   [ box(*uniques_safes.total_bounds), box(*safes_not_colocalized.total_bounds) ] +  scihub_shapes 
+                                   },crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
+        
         if bounds is not None:
             xmin,xmax = ax.get_xlim()
             ymin,ymax = ax.get_ylim()
