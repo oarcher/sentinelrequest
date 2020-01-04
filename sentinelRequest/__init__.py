@@ -16,6 +16,7 @@ import shapely.ops as ops
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, LineString, box
 from shapely.ops import transform
 import math 
+import pyproj
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -153,8 +154,25 @@ def split_east_west(shape):
     shape_east = ops.cascaded_union(shapes_east_list)
     shape_west = ops.cascaded_union(shapes_west_list)
     
+    return shape_east,shape_west
+
+def split_unknown_crs(shape):
+    # we will assume that 0,0 is singularity. (TODO : deduce from crs)
+    #Proj(init='epsg:26915').is_latlong -> False
+    if shape.is_empty:
+        return shape
+    r = 40000 * 1000
+    c = 1000
+    ur = shape.intersection(box( c, c, r, r))
+    ul = shape.intersection(box( c,-c, r,-r))
+    ll = shape.intersection(box(-c,-c,-r,-r))
+    lr = shape.intersection(box(-c, c,-r, r))
     
-    return (shape_east,shape_west)
+    res = GeometryCollection([ur,ul,ll,lr])
+    if res.is_empty or not res.is_valid:
+        raise ValueError("Unable to split shape")
+    
+    return res
 
 def smallest_dlon(shape):
     if not shape.is_empty and not hasattr(shape,'__iter__'):
@@ -162,17 +180,19 @@ def smallest_dlon(shape):
         dlon = shape.bounds[2]-shape.bounds[0]
         if dlon > 180:
             logger.debug("large dlon %.0f converted  to short for shape %s" % (dlon,shape))
-            return transform(lambda lon, lat: (lon%360, lat), shape)
+            return GeometryCollection(split_east_west(transform(lambda lon, lat: (lon%360, lat), shape)))
     
     return shape
     
+def transform_crs(shape,crs_in,crs_out):
+    return transform(lambda x, y: pyproj.transform(pyproj.Proj(**crs_in), pyproj.Proj(**crs_out), x, y), shape)
 
-def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
+def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, cacherefreshrecent=datetime.timedelta(days=7) , return_cache_status=False):
     """
     real scihub query, as done on https://scihub.copernicus.eu/dhus/#/home
     but with cache handling
-    
-    return a geodataframe with responses
+     
+    return a geodataframe with responses, or tuple (gdf,cache_status) if return_cache_status is True
     """
     
     def decode_date(strdate):
@@ -193,6 +213,8 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
     start=0
     count=1 # arbitrary count > start
     retry=retry_init
+    
+    cache_status = False
     
     if cachedir and not os.path.exists(cachedir):
         os.makedirs(cachedir)
@@ -219,8 +241,9 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
                     os.unlink(xml_cachefile)
                     root=None
                 
-        
-        if root is None:
+        if root is not None:
+            cache_status = True
+        else:
             # request not cached
             xmlout=requests.get(urlapi,auth=(user,password),params=params)
         
@@ -315,7 +338,11 @@ def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, ca
             
         #safes['footprint'] = gpd.GeoSeries(safes['footprint'])
         safes.crs = scihub_crs
-    return safes
+        
+    if return_cache_status :
+        return safes,cache_status
+    else:
+        return safes
     
     
 def colocalize(safes, gdf, crs=scihub_crs):
@@ -332,18 +359,18 @@ def colocalize(safes, gdf, crs=scihub_crs):
     gdf['geometry'] = gdf.geometry
     
     safes_coloc = safes.iloc[0:0,:].copy()
-    safes_coloc.crs = {'init' : 'epsg:4326' }
+    safes_coloc.crs = scihub_crs
     scihub_mode = False
     
     safes_crs = safes.copy()
     
-    if crs['init'] == 'epsg:4326' and 'geometry_east' in gdf and 'geometry_west' in gdf:
+    if crs['init'] == scihub_crs['init'] and 'geometry_east' in gdf and 'geometry_west' in gdf:
         scihub_mode = True
         # remove unused geometry
         old_geometry = gdf.geometry.name
         gdf.set_geometry('geometry_east',inplace=True)
         gdf.drop(labels=[old_geometry],inplace=True,axis=1)
-    elif crs['init'] != 'epsg:4326':
+    elif crs['init'] != scihub_crs['init']:
         gdf.set_geometry('geometry',inplace=True)
         gdf.to_crs(crs,inplace=True)
         safes_crs.to_crs(crs,inplace=True)
@@ -368,11 +395,13 @@ def colocalize(safes, gdf, crs=scihub_crs):
             
             
         if 'geometry' in gdf_item:
-            intersect_safes = timeok_safes[timeok_safes.intersects(gdf_item['geometry'])].copy()
+            intersect_safes = timeok_safes[
+                timeok_safes.contains(gdf_item['geometry']) | 
+                timeok_safes.intersects(gdf_item['geometry']) ].copy()
         elif scihub_mode:
             intersect_safes = pd.concat([
-                timeok_safes[timeok_safes.intersects(gdf_item['geometry_east'])].copy(),
-                timeok_safes[timeok_safes.intersects(gdf_item['geometry_west'])].copy()
+                timeok_safes.contains(gdf_item['geometry_east']) | timeok_safes[timeok_safes.intersects(gdf_item['geometry_east'])].copy(),
+                timeok_safes.contains(gdf_item['geometry_west']) | timeok_safes[timeok_safes.intersects(gdf_item['geometry_west'])].copy()
                 ])
         else:
             # if the user gave no geometry
@@ -473,29 +502,69 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         # no slicing
         timedelta_slice = None
     
-    if norm_gdf.crs is None:
-        logger.warning('no crs provided. assuming lon/lat')
-        norm_gdf.crs = scihub_crs
-    
     # check valid input geometry
     if not all(norm_gdf.is_valid):
         raise ValueError("Invalid geometries found. Check them with gdf.is_valid")
+   
+    norm_gdf['wrap_dlon'] = False
     
-    norm_gdf = norm_gdf.to_crs(scihub_crs)
+    crs_ori = norm_gdf.crs
+    if crs_ori is None:
+        logger.warning('no crs provided. assuming lon/lat with greenwich/antimeridian handling')
+        norm_gdf['wrap_dlon'] = norm_gdf.geometry.apply(lambda s : not hasattr(s,'__iter__'))
+        norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
+        norm_gdf.crs = scihub_crs
     
-    # check valid input geometry
-    if not all(norm_gdf.is_valid):
-        all_count = len(norm_gdf)
-        norm_gdf = norm_gdf[norm_gdf.is_valid]
-        valid_cound = len(norm_gdf)
-        logging.error("Dropped %d/%d geometries that cannot be converted to %s" % (all_count - valid_cound,all_count,scihub_crs['init']))
+    # scihub requests are enlarged/simplified
+    if pyproj.Proj(init=norm_gdf.crs['init']).is_latlong():
+        buff=2
+        simp=1.9
+    else:
+        # assume meters
+        buff=200*1000
+        simp=190*1000
+   
+    norm_gdf['scihub_geometry'] = norm_gdf.geometry.buffer(buff).simplify(simp)
+    if crs_ori is None:
+        # re apply smallest dlon if needed
+        norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').apply(
+            lambda row: smallest_dlon(row['scihub_geometry']) if row['wrap_dlon'] else GeometryCollection([row['scihub_geometry']]),
+            axis=1)
+        
     
-    norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
-    east,west = zip(*norm_gdf.geometry.apply(split_east_west))
-    norm_gdf['geometry_east'] = list(east)
-    norm_gdf['geometry_west'] = list(west)
+    if norm_gdf.crs['init'] != scihub_crs['init']:
+        # convert scihub geometry to lon/lat (original geometry untouched !)
+        norm_gdf_ori = norm_gdf.copy()
+        crs_ori = norm_gdf.crs
+        norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.to_crs(scihub_crs)
+        #norm_gdf['scihub_geometry'] = 
     
-    #norm_gdf.geometry = norm_gdf.geometry.apply(split_boundaries)
+        # check valid output geometry
+        if not all(norm_gdf.set_geometry('scihub_geometry').geometry.is_valid):
+            raise NotImplementedError("To be checked")
+            # an output geometry is invalid if it include 4326 singularity (ie pole) 
+            all_count = len(norm_gdf)
+            valid = norm_gdf.is_valid
+            
+            # split into geometry collection that doesn't include singularity
+            corrected = norm_gdf_ori[~valid].geometry.apply(split_unknown_crs)
+            
+            
+            norm_gdf.loc[~valid,norm_gdf.geometry.name] = corrected.to_crs(scihub_crs)
+            if not all(norm_gdf.is_valid):
+                raise ValueError("unable to convert to crs %s" % scihub_crs['init'])
+            
+            logging.error("Converted %s/%s problematic projection %s -> %s geometries " % (len(corrected),all_count,crs_ori , scihub_crs['init']))
+        
+        # encapsulate geometry in collection to presereve large dlon
+        norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.apply(lambda s : GeometryCollection([s]))
+    
+    
+    #else:    
+    #    norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
+    east,west = zip(*norm_gdf.set_geometry('scihub_geometry').geometry.apply(split_east_west))
+    norm_gdf['scihub_geometry_east_list'] = list(east)
+    norm_gdf['scihub_geometry_west_list'] = list(west)
     
     if date in norm_gdf:
         if (startdate not in norm_gdf) and (stopdate not in norm_gdf):
@@ -595,7 +664,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     safes_not_colocalized_list = [] # raw request
     safes_sea_ok_list = []
     safes_sea_nok_list = []
-    scihub_shapes = []
+    scihub_shapes_chunk = []
     user_shapes = []
     
     # user crs will be used for coloc
@@ -635,37 +704,37 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         if query:
             q.append("(%s)" % query)
         
-        shape_east_list = list(filter(bool , gdf_slice['geometry_east']))
-        shape_west_list = list(filter(bool , gdf_slice['geometry_west']))
+        shape_east_list = list(filter(bool , gdf_slice['scihub_geometry_east_list']))
+        shape_west_list = list(filter(bool , gdf_slice['scihub_geometry_west_list']))
 
         shape_east = Polygon()
         shape_west = Polygon()
 
         if shape_east_list:
-            shape_east = ops.cascaded_union(gdf_slice['geometry_east'])
+            shape_east = ops.cascaded_union(gdf_slice['scihub_geometry_east_list']).buffer(2).simplify(1.9)
         if shape_west_list:
-            shape_west = ops.cascaded_union(gdf_slice['geometry_west'])
+            shape_west = ops.cascaded_union(gdf_slice['scihub_geometry_west_list']).buffer(2).simplify(1.9)
 
         
+                
         wkt_shapes = []
-
+        
         for shape,plan in zip([shape_east,shape_west],[plan_east,plan_west]):
             if not shape.is_empty:
-                user_shapes.extend(shape_west_list+shape_east_list)
-                # scihub request shape is less complex then user shape
-                scihub_shape = shape.buffer(2)
-                scihub_shape = scihub_shape.simplify(1.9)
                        
                 #round the shape
-                scihub_shape=wkt.loads(wkt.dumps(scihub_shape,rounding_precision=rounding_precision))
+                scihub_shape_round=wkt.loads(wkt.dumps(shape,rounding_precision=rounding_precision))
                
-                # ensure valid coords
-                scihub_shape = scihub_shape.intersection(plan) 
+                # ensure valid coords after rounding
+                try:
+                    scihub_shape = scihub_shape_round.intersection(plan)
+                    wkt_shapes.append(wkt.dumps(scihub_shape,rounding_precision=rounding_precision))
+                except:
+                    # no rounding
+                    wkt_shapes.append(wkt.dumps(scihub_shape))
                 
                 
-                wkt_shapes.append(wkt.dumps(scihub_shape,rounding_precision=rounding_precision))
-            
-                scihub_shapes.append(scihub_shape)
+                scihub_shapes_chunk.append(scihub_shape)
         
         footprints=['footprint:\"Intersects(%s)\" ' % wkt_shape  for wkt_shape in wkt_shapes ]
         
@@ -676,12 +745,12 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         logger.debug("query: %s" % str_query)
         
         if len(str_query) > 8000:
-            raise ValueError('to long query')
+            raise ValueError('to long query (%s > 8000)' % len(str_query))
         
         # todo : if len(str_query) > 8000 (https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI#Discover_the_products_over_a_pre)
         
         t=time.time()
-        safes_unfiltered=scihubQuery_raw(str_query, user=user, password=password, cachedir=cachedir,cacherefreshrecent=cacherefreshrecent)
+        safes_unfiltered,cache_status=scihubQuery_raw(str_query, user=user, password=password, cachedir=cachedir,cacherefreshrecent=cacherefreshrecent, return_cache_status=True)
         elapsed_request = time.time()-t
         safes_unfiltered_count = len(safes_unfiltered)
         logger.debug("requested safes from scihub : %s (%.2f secs)" % (safes_unfiltered_count,elapsed_request))
@@ -726,14 +795,20 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
         if gdf is not None:
+            if cache_status:
+                cache_str = "cache"
+            else:
+                cache_str = "http " 
             time_str = ""
             if elapsed_request > 2 or elapsed_coloc > 2:
                 time_str = " Times : req {treq:2.1f}s".format(treq=elapsed_request)
                 if elapsed_coloc > 2:
-                    time_str +=", coloc {tcoloc:2.1f}s".format(tcoloc=elapsed_coloc,)
-            logger.info("Req {ireq:3d}/{nreq:3d} ( {chunk_size:3d} items ) : {nsafes_ok:3d}/{nsafes:3d} SAFES -> {ncoloc:4d} colocs. {time_str}".format(
+                    time_str +=", coloc {tcoloc:2.1f}s".format(tcoloc=elapsed_coloc)
+                    
+            logger.info("Req {ireq:3d}/{nreq:3d} ( {chunk_size:3d} items ) : {nsafes_ok:3d}/{nsafes:3d} SAFES ({cache_status}) -> {ncoloc:4d} colocs. {time_str}".format(
                         chunk_size = len(gdf_slice),
                         ireq=idx,nreq=len(gdflist), nsafes_ok=len(safes['filename'].unique()),
+                        cache_status=cache_str,
                         nsafes=safes_unfiltered_count,ncoloc=len(safes['filename']),
                         time_str=time_str)
                 )
@@ -760,14 +835,25 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         ax = fig.add_subplot(111)
         handles = []
         if gdf is not None:
-            gdf_sel=gpd.GeoDataFrame({'geometry':user_shapes},crs=scihub_crs)
-            gdf_sel.to_crs(crs=crs,inplace=True)
-            gdf_sel.geometry.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
-            handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
-        if scihub_shapes:
-            gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes},crs=scihub_crs)
-            gdf_sel.to_crs(crs=crs,inplace=True)
-            gdf_sel.geometry.buffer(0).plot(ax=ax,color='none',edgecolor='red',zorder=3)
+            #gdf_sel=gpd.GeoDataFrame({'geometry':user_shapes},crs=scihub_crs)
+            #gdf_sel.to_crs(crs=crs,inplace=True)
+            #gdf_sel.geometry.plot(ax=ax, color='none' , edgecolor='green',zorder=3)
+            # original user request # TODO other color for invalid ones ?
+            # decide if loop is over dataframe or over rows
+            if isinstance(gdflist, list):
+                all_user_geom = pd.concat(gdflist)
+            else:
+                all_user_geom = gdflist
+            all_user_geom_shp = all_user_geom.geometry
+            if not all(all_user_geom_shp.is_empty):
+                all_user_geom_shp.explode().plot(ax=ax, color='none' , edgecolor='green',zorder=3) 
+                handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
+        
+        if scihub_shapes_chunk:
+            #logger.info("scihub_shapes_chunk : %s" % str(scihub_shapes_chunk))
+            gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes_chunk},crs=scihub_crs)
+            gdf_sel.to_crs(crs=crs,inplace=True) # todo : check valid
+            gdf_sel.geometry.buffer(0).plot(ax=ax,color='none',edgecolor='red',zorder=4)
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
         
         if len(safes_not_colocalized) > 0 : 
@@ -790,10 +876,16 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
         continents.to_crs(crs=crs).plot(ax=ax,zorder=0,color='gray',alpha=0.2)
         
-        bounds = gpd.GeoDataFrame({'geometry': 
-                                   [ box(*uniques_safes.total_bounds), box(*safes_not_colocalized.total_bounds) ] +  scihub_shapes 
-                                   },crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
-        
+        bounds = None
+        try:
+            bounds = gpd.GeoDataFrame({'geometry': 
+                                       [ box(*uniques_safes.total_bounds), box(*safes_not_colocalized.total_bounds) ] +  scihub_shapes_chunk 
+                                       },crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
+        except Exception as e:
+            logger.debug("bounds fallback : %s" % str(e))
+            bounds = gpd.GeoDataFrame({'geometry': scihub_shapes_chunk 
+                                       },crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds 
+
         if bounds is not None:
             xmin,xmax = ax.get_xlim()
             ymin,ymax = ax.get_ylim()
