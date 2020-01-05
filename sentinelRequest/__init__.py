@@ -157,12 +157,12 @@ def split_east_west(shape):
     return shape_east,shape_west
 
 def split_unknown_crs(shape):
-    # we will assume that 0,0 is singularity. (TODO : deduce from crs)
+    # we will assume that 0,0 is singularity, and unit is meters (TODO : deduce from crs)
     #Proj(init='epsg:26915').is_latlong -> False
     if shape.is_empty:
         return shape
     r = 40000 * 1000
-    c = 1000
+    c = 1 # not 0
     ur = shape.intersection(box( c, c, r, r))
     ul = shape.intersection(box( c,-c, r,-r))
     ll = shape.intersection(box(-c,-c,-r,-r))
@@ -536,12 +536,13 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         # convert scihub geometry to lon/lat (original geometry untouched !)
         norm_gdf_ori = norm_gdf.copy()
         crs_ori = norm_gdf.crs
+        norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.apply(split_unknown_crs)
         norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.to_crs(scihub_crs)
         #norm_gdf['scihub_geometry'] = 
     
         # check valid output geometry
         if not all(norm_gdf.set_geometry('scihub_geometry').geometry.is_valid):
-            raise NotImplementedError("To be checked")
+            raise NotImplementedError("Internal error converting crs %s to %s" % (norm_gdf.crs['init'] , scihub_crs['init']))
             # an output geometry is invalid if it include 4326 singularity (ie pole) 
             all_count = len(norm_gdf)
             valid = norm_gdf.is_valid
