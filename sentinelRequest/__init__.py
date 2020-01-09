@@ -2,7 +2,6 @@ from __future__ import print_function
 import os,sys
 import datetime
 import time
-import pickle
 import requests
 from lxml import etree
 import logging
@@ -27,6 +26,14 @@ if sys.gettrace():
     pd.set_option('display.width', 1000)
 else:
     logger.setLevel(logging.INFO)
+    
+# default values (user may change them)
+default_user='guest'
+default_password='guest'
+default_cachedir=None
+default_cacherefreshrecent=datetime.timedelta(days=7)
+default_timedelta_slice=datetime.timedelta(weeks=1)
+default_filename = 'S1*'
 
 #all wkt objects feeded to scihub will keep rounding_precision digits (1 = 0.1 )
 #this will allow to not have too long requests
@@ -200,13 +207,23 @@ def smallest_dlon(shape):
 def transform_crs(shape,crs_in,crs_out):
     return transform(lambda x, y: pyproj.transform(pyproj.Proj(**crs_in), pyproj.Proj(**crs_out), x, y), shape)
 
-def scihubQuery_raw(str_query, user='guest', password='guest', cachedir=None, cacherefreshrecent=datetime.timedelta(days=7) , return_cache_status=False):
+def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacherefreshrecent=None , return_cache_status=False):
     """
     real scihub query, as done on https://scihub.copernicus.eu/dhus/#/home
     but with cache handling
      
     return a geodataframe with responses, or tuple (gdf,cache_status) if return_cache_status is True
     """
+    
+    # get default keywords values
+    if user is None:
+        user = default_user
+    if password is None:
+        password = default_password
+    if cachedir is None:
+        cachedir = default_cachedir
+    if cacherefreshrecent is None:
+        cacherefreshrecent = default_cacherefreshrecent
     
     def decode_date(strdate):
         # date format can change ..
@@ -459,7 +476,19 @@ def remove_duplicates(safes_ori,keep_list=[]):
         safes.drop('__filename_radic',axis=1,inplace=True)
     return safes
 
-def get_datatakes(safes, datatake=0, user='guest', password='guest', cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
+def get_datatakes(safes, datatake=0, user=None, password=None, cachedir=None, cacherefreshrecent=None):
+    
+     # get default keywords values
+    if user is None:
+        user = default_user
+    if password is None:
+        password = default_password
+    if cachedir is None:
+        cachedir = default_cachedir
+    if cacherefreshrecent is None:
+        cacherefreshrecent = default_cacherefreshrecent
+        
+    
     safes['datatake_index'] = 0
     for safe in list(safes['filename']):
         safe_index = safes[safes['filename'] == safe].index[0]
@@ -496,11 +525,13 @@ def get_datatakes(safes, datatake=0, user='guest', password='guest', cachedir=No
         safes = safes.append(safes_datatake)
     return safes
     
-def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),smallest_geometry=True):
+def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None):
     """ return a normalized gdf list 
     start/stop date name will be 'beginposition' and 'endposition'
     """
     t = time.time()
+    if timedelta_slice is None:
+        timedelta_slice = default_timedelta_slice
     if gdf is not None:
         if not gdf.index.is_unique:
             raise IndexError("Index must be unique. Duplicate founds : %s" % list(gdf.index[gdf.index.duplicated(keep=False)].unique()))
@@ -640,7 +671,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
                 logger.info('Slicing done in %.1fs . %d/%d non empty slices.' % (time.time()-t, len(gdf_slices), nslices  ))    
     return gdf_slices
 
-def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=datetime.timedelta(weeks=1),filename='S1*', datatake=0, duplicate=False, query=None, user='guest', password='guest', min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=datetime.timedelta(days=7)):
+def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None,filename=None, datatake=0, duplicate=False, query=None, user=None, password=None, min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=None):
     """
     
     input:
@@ -680,6 +711,21 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     return :
         a geodataframe with safes from scihub, colocated with input gdf (ie same index)
     """
+    
+     # get default keywords values
+    if user is None:
+        user = default_user
+    if password is None:
+        password = default_password
+    if cachedir is None:
+        cachedir = default_cachedir
+    if cacherefreshrecent is None:
+        cacherefreshrecent = default_cacherefreshrecent
+    if timedelta_slice is None:
+        timedelta_slice = default_timedelta_slice
+    if filename is None:
+        filename = default_filename
+    
     gdflist= normalize_gdf(gdf,startdate=startdate,stopdate=stopdate,date=date,dtime=dtime,timedelta_slice=timedelta_slice)
     safes_list = []  # final request
     safes_not_colocalized_list = [] # raw request
