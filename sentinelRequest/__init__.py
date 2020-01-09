@@ -518,10 +518,12 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     # scihub requests are enlarged/simplified
     userProj = pyproj.Proj(init=norm_gdf.crs['init'])
     if hasattr(userProj,'is_geographic' ):
+        # for pyproj >=2
         is_latlong = userProj.is_geographic
     else:
+        # for pyproj <2
         is_latlong = userProj.is_latlong()
-    if is_latlong: # is_latlong(): # TODO use is_geographic for pyproj >= 2
+    if is_latlong: 
         buff=2
         simp=1.9
     else:
