@@ -156,13 +156,26 @@ def split_east_west(shape):
     
     return shape_east,shape_west
 
-def split_unknown_crs(shape):
-    # we will assume that 0,0 is singularity, and unit is meters (TODO : deduce from crs)
-    #Proj(init='epsg:26915').is_latlong -> False
+def split_shape_crs(shape,crs=None):
+    # we will assume that 0,0 is singularity (ie 0,0 in crs is pole : 
+    # if this assertion is not valid, the split is not needed, but it will works if splitted) 
     if shape.is_empty:
         return shape
-    r = 40000 * 1000
-    c = 1 # not 0
+    is_latlong = False
+    if crs is not None:
+        userProj = pyproj.Proj(**crs)
+        if hasattr(userProj,'is_geographic' ):
+            # for pyproj >=2
+            is_latlong = userProj.is_geographic
+        else:
+            # for pyproj <2
+            is_latlong = userProj.is_latlong()
+    if is_latlong:
+        r = 180
+        c = 0.1
+    else:
+        r = 40000 * 1000
+        c = 1 # not 0
     ur = shape.intersection(box( c, c, r, r))
     ul = shape.intersection(box( c,-c, r,-r))
     ll = shape.intersection(box(-c,-c,-r,-r))
@@ -543,7 +556,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         # convert scihub geometry to lon/lat (original geometry untouched !)
         norm_gdf_ori = norm_gdf.copy()
         crs_ori = norm_gdf.crs
-        norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.apply(split_unknown_crs)
+        norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.apply(lambda s : split_shape_crs(s,crs=norm_gdf.crs))
         norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.to_crs(scihub_crs)
         #norm_gdf['scihub_geometry'] = 
     
@@ -555,7 +568,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             valid = norm_gdf.is_valid
             
             # split into geometry collection that doesn't include singularity
-            corrected = norm_gdf_ori[~valid].geometry.apply(split_unknown_crs)
+            corrected = norm_gdf_ori[~valid].geometry.apply(lambda s : split_shape_crs(s,crs=norm_gdf_ori.crs))
             
             
             norm_gdf.loc[~valid,norm_gdf.geometry.name] = corrected.to_crs(scihub_crs)
