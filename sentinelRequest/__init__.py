@@ -16,6 +16,7 @@ from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, LineStri
 from shapely.ops import transform
 import math 
 import pyproj
+import geo_shapely as geoshp
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -59,14 +60,6 @@ urlapi='https://scihub.copernicus.eu/apihub/search'
 
 # earth as multi poly
 earth = MultiPolygon(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
-# valid coords
-#plan_map=wkt.loads("POLYGON ((-180 -90, -180 90, 180 90, 180 -90, -180 -90))")
-plan_map=box(-180,-90,180,90)
-plan_east=box(-180,-90,0,90)
-plan_west=box(0,-90,180,90)
-plan_east1=box(180,-90,360,90)
-plan_west1=box(-180,-90,-360,90)
-
 
 # projection used by scihub
 scihub_crs = {'init': 'epsg:4326'}
@@ -113,99 +106,6 @@ def download_scihub(filename,user='guest', password='guest'):
     xmlout=requests.get(urldl,auth=(user,password))
     
     return xmlout
-
-def shape180(lon,lat):
-    """shapely shape to -180 180 (for shapely.ops.transform)"""
-    import numpy as np
-    orig_type=type(lon)
-    
-    lon = np.array(lon) % 360 
-    change = lon>180
-    
-    lon[change]=lon[change]-360
-
-    # check if 180 should be changed to -180
-    if np.sum(lon[lon != 180.0]) <0:
-        lon[lon == 180.0] = -180.0
-
-    return tuple([(orig_type)(lon) ,lat])
-
-def split_east_west(shape):
-    """
-        given a shape in range -360 360, return a tuple (shape_east,shape_west)
-    """
-    
-    area = shape.area
-    
-    if not shape.is_valid:
-        logger.warning('invalid geometry corrected by buffer(0)')
-        shape=shape.buffer(0)
-    
-    shapes_east_list = []
-    shapes_west_list = []
-    
-    if not hasattr(shape,'__iter__'):
-        shape=[shape]
-    
-    for s in shape:
-        shapes_east = []
-        shapes_west = []
-        shapes_east = [ transform(shape180,s.intersection(east)) for east in [plan_east,plan_east1] ]
-        shapes_west = [ transform(shape180,s.intersection(west)) for west in [plan_west,plan_west1] ]
-        shapes_east_list.extend(shapes_east)
-        shapes_west_list.extend(shapes_west)
-        
-    shapes_east_list = list(filter(lambda s : not s.is_empty and (s.area > 0 or area == 0 ), shapes_east_list))
-    shapes_west_list = list(filter(lambda s : not s.is_empty and (s.area > 0 or area == 0 ), shapes_west_list))
-            
-    shape_east = ops.cascaded_union(shapes_east_list)
-    shape_west = ops.cascaded_union(shapes_west_list)
-    
-    return shape_east,shape_west
-
-def split_shape_crs(shape,crs=None):
-    # we will assume that 0,0 is singularity (ie 0,0 in crs is pole : 
-    # if this assertion is not valid, the split is not needed, but it will works if splitted) 
-    if shape.is_empty:
-        return shape
-    is_latlong = False
-    if crs is not None:
-        userProj = pyproj.Proj(**crs)
-        if hasattr(userProj,'is_geographic' ):
-            # for pyproj >=2
-            is_latlong = userProj.is_geographic
-        else:
-            # for pyproj <2
-            is_latlong = userProj.is_latlong()
-    if is_latlong:
-        r = 180
-        c = 0.1
-    else:
-        r = 40000 * 1000
-        c = 1 # not 0
-    ur = shape.intersection(box( c, c, r, r))
-    ul = shape.intersection(box( c,-c, r,-r))
-    ll = shape.intersection(box(-c,-c,-r,-r))
-    lr = shape.intersection(box(-c, c,-r, r))
-    
-    res = GeometryCollection([ur,ul,ll,lr])
-    if res.is_empty or not res.is_valid:
-        raise ValueError("Unable to split shape")
-    
-    return res
-
-def smallest_dlon(shape):
-    if not shape.is_empty and not hasattr(shape,'__iter__'):
-        # only translate pure polygone
-        dlon = shape.bounds[2]-shape.bounds[0]
-        if dlon > 180:
-            logger.debug("large dlon %.0f converted  to short for shape %s" % (dlon,shape))
-            return GeometryCollection(split_east_west(transform(lambda lon, lat: (lon%360, lat), shape)))
-    
-    return shape
-    
-def transform_crs(shape,crs_in,crs_out):
-    return transform(lambda x, y: pyproj.transform(pyproj.Proj(**crs_in), pyproj.Proj(**crs_out), x, y), shape)
 
 def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacherefreshrecent=None , return_cache_status=False):
     """
@@ -556,7 +456,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     if crs_ori is None:
         logger.warning('no crs provided. assuming lon/lat with greenwich/antimeridian handling')
         norm_gdf['wrap_dlon'] = norm_gdf.geometry.apply(lambda s : not hasattr(s,'__iter__'))
-        norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
+        norm_gdf.geometry = norm_gdf.geometry.apply(geoshp.smallest_dlon)
         norm_gdf.crs = scihub_crs
     
     # scihub requests are enlarged/simplified
@@ -579,7 +479,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     if crs_ori is None:
         # re apply smallest dlon if needed
         norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').apply(
-            lambda row: smallest_dlon(row['scihub_geometry']) if row['wrap_dlon'] else GeometryCollection([row['scihub_geometry']]),
+            lambda row: geoshp.smallest_dlon(row['scihub_geometry']) if row['wrap_dlon'] else GeometryCollection([row['scihub_geometry']]),
             axis=1)
         
     
@@ -587,7 +487,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         # convert scihub geometry to lon/lat (original geometry untouched !)
         norm_gdf_ori = norm_gdf.copy()
         crs_ori = norm_gdf.crs
-        norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.apply(lambda s : split_shape_crs(s,crs=norm_gdf.crs))
+        norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.apply(lambda s : geoshp.split_shape_crs(s,crs=norm_gdf.crs))
         norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.to_crs(scihub_crs)
         #norm_gdf['scihub_geometry'] = 
     
@@ -599,7 +499,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             valid = norm_gdf.is_valid
             
             # split into geometry collection that doesn't include singularity
-            corrected = norm_gdf_ori[~valid].geometry.apply(lambda s : split_shape_crs(s,crs=norm_gdf_ori.crs))
+            corrected = norm_gdf_ori[~valid].geometry.apply(lambda s : geoshp.split_shape_crs(s,crs=norm_gdf_ori.crs))
             
             
             norm_gdf.loc[~valid,norm_gdf.geometry.name] = corrected.to_crs(scihub_crs)
@@ -614,7 +514,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     
     #else:    
     #    norm_gdf.geometry = norm_gdf.geometry.apply(smallest_dlon)
-    east,west = zip(*norm_gdf.set_geometry('scihub_geometry').geometry.apply(split_east_west))
+    east,west = zip(*norm_gdf.set_geometry('scihub_geometry').geometry.apply(geoshp.split_east_west))
     norm_gdf['scihub_geometry_east_list'] = list(east)
     norm_gdf['scihub_geometry_west_list'] = list(west)
     
@@ -786,7 +686,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 
         wkt_shapes = []
         
-        for shape,plan in zip([shape_east,shape_west],[plan_east,plan_west]):
+        for shape,plan in zip([shape_east,shape_west],[geoshp.plan_east,geoshp.plan_west]):
             if not shape.is_empty:
                        
                 #round the shape
@@ -924,21 +824,21 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
         
         if len(safes_not_colocalized) > 0 : 
-            safes_not_colocalized.geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+            safes_not_colocalized.geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
             handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
             
         if len(uniques_safes) > 0:
             if 'datatake_index' in uniques_safes:
-                uniques_safes[uniques_safes['datatake_index'] == 0].geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
-                uniques_safes[uniques_safes['datatake_index'] != 0].geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
+                uniques_safes[uniques_safes['datatake_index'] == 0].geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+                uniques_safes[uniques_safes['datatake_index'] != 0].geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='cyan',zorder=2,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='cyan', label='datatake'))
             else:
-                uniques_safes.geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
+                uniques_safes.geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='blue',zorder=2, alpha=0.7)
             
             handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
 
             if min_sea_percent is not None and len(safes_sea_nok) > 0:
-                safes_sea_nok.geometry.apply(smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
+                safes_sea_nok.geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
                 handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
         continents.to_crs(crs=crs).plot(ax=ax,zorder=0,color='gray',alpha=0.2)
