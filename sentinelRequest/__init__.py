@@ -17,7 +17,7 @@ from shapely.ops import transform
 import math 
 import pyproj
 import geo_shapely as geoshp
-from geopandas_coloc import colocalize
+from geopandas_coloc import colocalize #_apply as colocalize
 import warnings
 
 logging.basicConfig()
@@ -231,7 +231,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
         
         
         if len(root.findall(".//entry")) > 0:
-            chunk_safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint',crs=scihub_crs)
+            chunk_safes_df=pd.DataFrame(columns=answer_fields)
             t=time.time()
             for field in answer_fields:
                 if field.startswith('url'):
@@ -244,13 +244,24 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
                     values = [d.attrib['href'] for d in elts]
                 else:
                     elts = root.xpath(".//entry/*[@name='%s']" % field)
-                    tag = elts[0].tag # ie str,int,date ..
-                    values = [d.text for d in elts]
-                chunk_safes[field]=values
-                if tag in decode_tags:
-                    chunk_safes[field] = chunk_safes[field].apply(decode_tags[tag])
-            chunk_safes['footprint'] = chunk_safes['footprint'].apply(wkt.loads).buffer(0)
-            
+                    if len(elts) != 0:
+                        tag = elts[0].tag # ie str,int,date ..
+                        values = [d.text for d in elts]
+                    else:
+                        tag = None
+                        values = []
+                        logger.warning("Ignoring field %s (not found)." % field)
+                if len(values) >= 1:
+                    chunk_safes_df[field]=values
+                    if tag in decode_tags:
+                        chunk_safes_df[field] = chunk_safes_df[field].apply(decode_tags[tag])
+            try:
+                shp_footprints = chunk_safes_df['footprint'].apply(wkt.loads)
+            except:
+                pass
+            chunk_safes_df['footprint'] = shp_footprints
+            chunk_safes=gpd.GeoDataFrame(chunk_safes_df,geometry='footprint',crs=scihub_crs)
+            chunk_safes['footprint']=chunk_safes.buffer(0)
             start+=len(chunk_safes)
             logger.debug("xml parsed in %.2f secs" % (time.time()-t))
 
@@ -355,22 +366,14 @@ def _colocalize(safes, gdf, crs=scihub_crs):
     
     the returned safes will be returned in scihub crs (ie 4326 : not the user specified)
     """
-    
+    if len(safes) == 0:
+        return safes
     gdf  = gdf.copy()
     gdf['geometry'] = gdf.geometry
     gdf['startdate'] = gdf['beginposition']
     gdf['stopdate'] = gdf['endposition']
     safes['startdate'] = safes['beginposition']
     safes['stopdate'] = safes['endposition']
-    
-    safes_index_name = safes.index.name
-    gdf_index_name = gdf.index.name
-    
-    if safes_index_name is None:
-        safes_index_name = 'index1'
-        
-    if gdf_index_name is None:
-        gdf_index_name = 'index2'
     
     safes_coloc = safes.iloc[0:0,:].copy()
     safes_coloc.crs = scihub_crs
@@ -392,17 +395,17 @@ def _colocalize(safes, gdf, crs=scihub_crs):
         safes_crs.to_crs(crs,inplace=True)
         safes_coloc.to_crs(crs,inplace=True)
     
-    coloc_idx_list = []
+    idx_safes = pd.Index([],name=safes.index.name)
+    idx_gdf = pd.Index([],name=gdf.index.name)
     for geometry in geometry_list:
         t = time.time()
-        coloc_idx_list.append(colocalize(safes_crs,gdf.set_geometry(geometry)))
+        idx_safes_cur, idx_gdf_cur = colocalize(safes_crs,gdf.set_geometry(geometry))
+        idx_safes = idx_safes.append(idx_safes_cur)
+        idx_gdf = idx_gdf.append(idx_gdf_cur)
         logger.debug('sub new coloc done in %ds' % (time.time() -t ))
-    coloc_idx = pd.concat(coloc_idx_list)
     
-    coloc_idx.drop_duplicates(inplace = True)
-    
-    safes_coloc = safes.loc[coloc_idx[safes_index_name]]
-    safes_coloc.index=coloc_idx[gdf_index_name]
+    safes_coloc = safes.loc[idx_safes]
+    safes_coloc.index=idx_safes
         
     return safes_coloc.drop(['startdate','stopdate'],axis=1).to_crs(crs=scihub_crs)
 
@@ -791,18 +794,19 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             t=time.time()
             safes =_colocalize(safes_unfiltered, gdf_slice, crs = crs)
             elapsed_coloc = time.time()-t
-            logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes_new),elapsed_coloc))
+            logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes),elapsed_coloc))
             
             # tmp validation with old method
             t=time.time()
             safes_old =_colocalize_old(safes_unfiltered, gdf_slice, crs = crs)
             elapsed_coloc = time.time()-t
-            logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes),elapsed_coloc))
+            logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes_old),elapsed_coloc))
             safes_diff = pd.concat([safes,safes_old],sort=False).drop_duplicates('filename',keep=False)
             if len(safes_diff):
                 safes_diff.reset_index(inplace=True)
                 logger.error("found %d diff with old coloc" % len(safes_diff))
                 safes_recheck = _colocalize(safes_diff, gdf_slice, crs = crs)
+                raise RuntimeError("coloc validation error")
             # end tmp validation
             
         else:
