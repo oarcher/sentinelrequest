@@ -19,6 +19,7 @@ import pyproj
 import geo_shapely as geoshp
 from geopandas_coloc import colocalize #_apply as colocalize
 import warnings
+from tqdm.auto import tqdm
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -250,7 +251,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
                     else:
                         tag = None
                         values = []
-                        logger.warning("Ignoring field %s (not found)." % field)
+                        logger.debug("Ignoring field %s (not found)." % field)
                 if len(values) >= 1:
                     chunk_safes_df[field]=values
                     if tag in decode_tags:
@@ -405,7 +406,7 @@ def _colocalize(safes, gdf, crs=scihub_crs):
         logger.debug('sub new coloc done in %ds' % (time.time() -t ))
     
     safes_coloc = safes.loc[idx_safes]
-    safes_coloc.index=idx_safes
+    safes_coloc.index=idx_gdf
         
     return safes_coloc.drop(['startdate','stopdate'],axis=1).to_crs(crs=scihub_crs)
 
@@ -603,6 +604,9 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     if timedelta_slice is not None:
         mindate=norm_gdf['beginposition'].min()
         maxdate=norm_gdf['endposition'].max()
+        if maxdate > datetime.datetime.utcnow():
+            logger.info("%s is future. Truncating." % maxdate)
+            maxdate = datetime.datetime.utcnow() + datetime.timedelta(days=1)
         if (mindate == mindate) and (maxdate == maxdate): # non nan
             gdf_slices = []
             slice_begin = mindate
@@ -638,7 +642,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
                 logger.info('Slicing done in %.1fs . %d/%d non empty slices.' % (time.time()-t, len(gdf_slices), nslices  ))    
     return gdf_slices
 
-def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None,filename=None, datatake=0, duplicate=False, query=None, user=None, password=None, min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=None):
+def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None,filename=None, datatake=0, duplicate=False, query=None, user=None, password=None, min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=None,progress=True,verbose=False,internal=False):
     """
     
     input:
@@ -675,9 +679,21 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             Default to datetime.timedelta(days=7).
         fig : 
             matplotlib fig handle ( default to None : no plot)
+        progress : True show progressbar
+        verbose  : False to silent messages
     return :
         a geodataframe with safes from scihub, colocated with input gdf (ie same index)
     """
+    
+    if not verbose :
+        logger.setLevel(logging.ERROR)
+    if sys.gettrace():
+        logger.setLevel(logging.DEBUG)
+        progress = False
+        internal = True
+    
+    if not sys.stderr.isatty() and "tqdm.std" in  str(tqdm):
+        progress = False
     
      # get default keywords values
     if user is None:
@@ -714,7 +730,9 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         iter_gdf = gdflist.itertuples()
     
     idx=0
-    for gdf_slice in iter_gdf:
+    pbar = tqdm(iter_gdf,total=len(gdflist),disable=not progress)
+    ncolocs = 0 # coloc count, for tqdm
+    for gdf_slice in pbar:
         idx+=1
         if isinstance(gdf_slice, tuple):
             gdf_slice=gpd.GeoDataFrame([gdf_slice],index=[gdf_slice.Index]) #.reindex_like(gdf) # only one row
@@ -797,16 +815,17 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes),elapsed_coloc))
             
             # tmp validation with old method
-            t=time.time()
-            safes_old =_colocalize_old(safes_unfiltered, gdf_slice, crs = crs)
-            elapsed_coloc = time.time()-t
-            logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes_old),elapsed_coloc))
-            safes_diff = pd.concat([safes,safes_old],sort=False).drop_duplicates('filename',keep=False)
-            if len(safes_diff):
-                safes_diff.reset_index(inplace=True)
-                logger.error("found %d diff with old coloc" % len(safes_diff))
-                safes_recheck = _colocalize(safes_diff, gdf_slice, crs = crs)
-                raise RuntimeError("coloc validation error")
+            if False:
+                t=time.time()
+                safes_old =_colocalize_old(safes_unfiltered, gdf_slice, crs = crs)
+                elapsed_coloc = time.time()-t
+                logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes_old),elapsed_coloc))
+                safes_diff = pd.concat([safes,safes_old],sort=False).drop_duplicates('filename',keep=False)
+                if len(safes_diff):
+                    safes_diff.reset_index(inplace=True)
+                    logger.error("found %d diff with old coloc" % len(safes_diff))
+                    safes_recheck = _colocalize(safes_diff, gdf_slice, crs = crs)
+                    raise RuntimeError("coloc validation error")
             # end tmp validation
             
         else:
@@ -852,27 +871,34 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 time_str = " Times : req {treq:2.1f}s".format(treq=elapsed_request)
                 if elapsed_coloc > 2:
                     time_str +=", coloc {tcoloc:2.1f}s".format(tcoloc=elapsed_coloc)
-                    
-            logger.info("Req {ireq:3d}/{nreq:3d} ( {chunk_size:3d} items ) : {nsafes_ok:3d}/{nsafes:3d} SAFES ({cache_status}) -> {ncoloc:4d} colocs. {time_str}".format(
+            
+            status_msg = "Req {ireq:3d}/{nreq:3d} ( {chunk_size:3d} items ) : {nsafes_ok:3d}/{nsafes:3d} SAFES ({cache_status}) -> {ncoloc:4d} colocs. {time_str}".format(
                         chunk_size = len(gdf_slice),
                         ireq=idx,nreq=len(gdflist), nsafes_ok=len(safes['filename'].unique()),
                         cache_status=cache_str,
                         nsafes=safes_unfiltered_count,ncoloc=len(safes['filename']),
                         time_str=time_str)
-                )
+            ncolocs += len(safes)
+            pbar.set_description("coloc : %04d" % ncolocs)
+            if verbose:
+                tqdm.write(status_msg,file=sys.stderr)
+            else:
+                logger.debug(status_msg)        
 
         safes_list.append(safes)
-        safes_not_colocalized_list.append(safes_not_colocalized)
-        if min_sea_percent is not None:
-            safes_sea_ok_list.append(safes_sea_ok)
-            safes_sea_nok_list.append(safes_sea_nok)
+        if internal:
+            safes_not_colocalized_list.append(safes_not_colocalized)
+            if min_sea_percent is not None:
+                safes_sea_ok_list.append(safes_sea_ok)
+                safes_sea_nok_list.append(safes_sea_nok)
         
     safes = pd.concat(safes_list,sort=False)
     safes = safes.sort_values('beginposition')
-    safes_not_colocalized = pd.concat(safes_not_colocalized_list,sort=False)
-    if min_sea_percent is not None:
-        safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
-        safes_sea_nok = pd.concat(safes_sea_nok_list,sort=False)
+    if internal:
+        safes_not_colocalized = pd.concat(safes_not_colocalized_list,sort=False)
+        if min_sea_percent is not None:
+            safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
+            safes_sea_nok = pd.concat(safes_sea_nok_list,sort=False)
     
     logger.info("Total : %s SAFES colocated with %s (%s uniques)." % (len(safes),crs['init'],len(safes['filename'].unique())))
     
@@ -897,16 +923,20 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 all_user_geom_shp.explode().plot(ax=ax, color='none' , edgecolor='green',zorder=3) 
                 handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
         
-        if scihub_shapes_chunk:
-            #logger.info("scihub_shapes_chunk : %s" % str(scihub_shapes_chunk))
-            gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes_chunk},crs=scihub_crs)
-            gdf_sel.to_crs(crs=crs,inplace=True) # todo : check valid
-            gdf_sel.geometry.buffer(0).plot(ax=ax,color='none',edgecolor='red',zorder=4)
-            handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
-        
-        if len(safes_not_colocalized) > 0 : 
-            safes_not_colocalized.geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
-            handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
+        if internal:
+            if scihub_shapes_chunk:
+                #logger.info("scihub_shapes_chunk : %s" % str(scihub_shapes_chunk))
+                gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes_chunk},crs=scihub_crs)
+                gdf_sel.to_crs(crs=crs,inplace=True) # todo : check valid
+                gdf_sel.geometry.buffer(0).plot(ax=ax,color='none',edgecolor='red',zorder=4)
+                handles.append(mpl.lines.Line2D([], [], color='red', label='scihub request'))
+            
+            if len(safes_not_colocalized) > 0 : 
+                safes_not_colocalized.geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none' , edgecolor='orange',zorder=1, alpha=0.2)
+                handles.append(mpl.lines.Line2D([], [], color='orange', label='not colocated'))
+            if min_sea_percent is not None and len(safes_sea_nok) > 0:
+                safes_sea_nok.geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
+                handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area > %s %%' % min_sea_percent))
             
         if len(uniques_safes) > 0:
             if 'datatake_index' in uniques_safes:
@@ -918,9 +948,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             
             handles.append(mpl.lines.Line2D([], [], color='blue', label='colocated'))
 
-            if min_sea_percent is not None and len(safes_sea_nok) > 0:
-                safes_sea_nok.geometry.apply(geoshp.smallest_dlon).to_crs(crs=crs).buffer(0).plot(ax=ax,color='none',edgecolor='olive',zorder=1,alpha=0.2)
-                handles.append(mpl.lines.Line2D([], [], color='olive', label='sea area < %s %%' % min_sea_percent))
+            
         continents = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
         continents.to_crs(crs=crs).plot(ax=ax,zorder=0,color='gray',alpha=0.2)
         
