@@ -17,6 +17,8 @@ from shapely.ops import transform
 import math 
 import pyproj
 import geo_shapely as geoshp
+from geopandas_coloc import colocalize
+import warnings
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -275,7 +277,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
         return safes
     
     
-def colocalize(safes, gdf, crs=scihub_crs):
+def _colocalize_old(safes, gdf, crs=scihub_crs):
     """colocalize safes and gdf
     if crs is default and 'geometry_east' and 'geometry_west' exists in gdf,
     they will be used instead of .geometry (scihub mode)
@@ -343,6 +345,68 @@ def colocalize(safes, gdf, crs=scihub_crs):
         safes_coloc = safes_coloc.append(intersect_safes)        
                 
     return safes_coloc.to_crs(crs=scihub_crs)
+
+def _colocalize(safes, gdf, crs=scihub_crs):
+    """colocalize safes and gdf
+    if crs is default and 'geometry_east' and 'geometry_west' exists in gdf,
+    they will be used instead of .geometry (scihub mode)
+    
+    if crs is not default the crs will be used on .geometry for the coloc.
+    
+    the returned safes will be returned in scihub crs (ie 4326 : not the user specified)
+    """
+    
+    gdf  = gdf.copy()
+    gdf['geometry'] = gdf.geometry
+    gdf['startdate'] = gdf['beginposition']
+    gdf['stopdate'] = gdf['endposition']
+    safes['startdate'] = safes['beginposition']
+    safes['stopdate'] = safes['endposition']
+    
+    safes_index_name = safes.index.name
+    gdf_index_name = gdf.index.name
+    
+    if safes_index_name is None:
+        safes_index_name = 'index1'
+        
+    if gdf_index_name is None:
+        gdf_index_name = 'index2'
+    
+    safes_coloc = safes.iloc[0:0,:].copy()
+    safes_coloc.crs = scihub_crs
+    scihub_mode = False
+    
+    safes_crs = safes.copy()
+    
+    geometry_list = ['geometry']
+    if crs['init'] == scihub_crs['init'] and 'geometry_east' in gdf and 'geometry_west' in gdf:
+        scihub_mode = True
+        # remove unused geometry
+        old_geometry = gdf.geometry.name
+        gdf.set_geometry('geometry_east',inplace=True)
+        gdf.drop(labels=[old_geometry],inplace=True,axis=1)
+        geometry_list = ['geometry_east','geometry_west']
+    elif crs['init'] != scihub_crs['init']:
+        gdf.set_geometry('geometry',inplace=True)
+        gdf.to_crs(crs,inplace=True)
+        safes_crs.to_crs(crs,inplace=True)
+        safes_coloc.to_crs(crs,inplace=True)
+    
+    coloc_idx_list = []
+    for geometry in geometry_list:
+        t = time.time()
+        coloc_idx_list.append(colocalize(safes_crs,gdf.set_geometry(geometry)))
+        logger.debug('sub new coloc done in %ds' % (time.time() -t ))
+    coloc_idx = pd.concat(coloc_idx_list)
+    
+    coloc_idx.drop_duplicates(inplace = True)
+    
+    safes_coloc = safes.loc[coloc_idx[safes_index_name]]
+    safes_coloc.index=coloc_idx[gdf_index_name]
+        
+    return safes_coloc.drop(['startdate','stopdate'],axis=1).to_crs(crs=scihub_crs)
+
+
 
 def remove_duplicates(safes_ori,keep_list=[]):
     """
@@ -422,7 +486,7 @@ def get_datatakes(safes, datatake=0, user=None, password=None, cachedir=None, ca
                 safes_datatake=safes_datatake[safes_datatake['filename'] != safe_datatake]
         
         
-        safes = safes.append(safes_datatake)
+        safes = safes.append(safes_datatake,sort=False)
     return safes
     
 def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None):
@@ -725,9 +789,22 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         elapsed_coloc = 0
         if gdf is not None:
             t=time.time()
-            safes=colocalize(safes_unfiltered, gdf_slice, crs = crs)
+            safes =_colocalize(safes_unfiltered, gdf_slice, crs = crs)
+            elapsed_coloc = time.time()-t
+            logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes_new),elapsed_coloc))
+            
+            # tmp validation with old method
+            t=time.time()
+            safes_old =_colocalize_old(safes_unfiltered, gdf_slice, crs = crs)
             elapsed_coloc = time.time()-t
             logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes),elapsed_coloc))
+            safes_diff = pd.concat([safes,safes_old],sort=False).drop_duplicates('filename',keep=False)
+            if len(safes_diff):
+                safes_diff.reset_index(inplace=True)
+                logger.error("found %d diff with old coloc" % len(safes_diff))
+                safes_recheck = _colocalize(safes_diff, gdf_slice, crs = crs)
+            # end tmp validation
+            
         else:
             safes=safes_unfiltered.copy()
             safes['__rowindex'] = 0
