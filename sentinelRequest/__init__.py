@@ -730,7 +730,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         iter_gdf = gdflist.itertuples()
     
     idx=0
-    pbar = tqdm(iter_gdf,total=len(gdflist),disable=not progress)
+    pbar = tqdm(iter_gdf,total=len(gdflist),disable=not progress,leave=False)
     ncolocs = 0 # coloc count, for tqdm
     for gdf_slice in pbar:
         idx+=1
