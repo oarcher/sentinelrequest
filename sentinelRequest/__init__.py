@@ -493,7 +493,7 @@ def get_datatakes(safes, datatake=0, user=None, password=None, cachedir=None, ca
         safes = safes.append(safes_datatake,sort=False)
     return safes
     
-def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None):
+def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None,progress=False):
     """ return a normalized gdf list 
     start/stop date name will be 'beginposition' and 'endposition'
     """
@@ -604,6 +604,8 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     if timedelta_slice is not None:
         mindate=norm_gdf['beginposition'].min()
         maxdate=norm_gdf['endposition'].max()
+        # those index will need to be time expanded
+        idx_to_expand = norm_gdf.index[( norm_gdf['endposition'] - norm_gdf['beginposition'] ) > timedelta_slice]
         if maxdate > datetime.datetime.utcnow():
             logger.info("%s is future. Truncating." % maxdate)
             maxdate = datetime.datetime.utcnow() + datetime.timedelta(days=1)
@@ -620,7 +622,10 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
                 slice_end = slice_begin + timedelta_slice
                 # this is time grouping
                 gdf_slice=norm_gdf[ (norm_gdf['beginposition'] >= slice_begin ) & (norm_gdf['endposition'] <= slice_end) ]
-                for to_expand in list(set(norm_gdf.index) - set(gdf_slice.index)):
+                # check if some slices needs to be expanded
+                # index of gdf_slice that where not grouped
+                not_grouped_index = pd.Index(set(idx_to_expand) - set(gdf_slice.index))
+                for to_expand in not_grouped_index:
                     # missings index in gdf_slice.
                     # check if there is time overlap.
                     latest_start = max(norm_gdf.loc[to_expand].beginposition , slice_begin)
