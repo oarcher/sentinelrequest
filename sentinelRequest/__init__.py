@@ -62,7 +62,7 @@ urlapi='https://scihub.copernicus.eu/apihub/search'
 #urlapi='https://scihub.copernicus.eu/dhus/search'
 
 # earth as multi poly
-earth = MultiPolygon(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
+earth = GeometryCollection(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
 
 # projection used by scihub
 scihub_crs = {'init': 'epsg:4326'}
@@ -642,7 +642,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
                 logger.info('Slicing done in %.1fs . %d/%d non empty slices.' % (time.time()-t, len(gdf_slices), nslices  ))    
     return gdf_slices
 
-def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None,filename=None, datatake=0, duplicate=False, query=None, user=None, password=None, min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=None,progress=True,verbose=False,internal=False):
+def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timedelta_slice=None,filename=None, datatake=0, duplicate=False, query=None, user=None, password=None, min_sea_percent=None, fig=None, cachedir=None, cacherefreshrecent=None,progress=True,verbose=False,full_fig=False):
     """
     
     input:
@@ -690,7 +690,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
     if sys.gettrace():
         logger.setLevel(logging.DEBUG)
         progress = False
-        internal = True
+        full_fig = True
     
     if not sys.stderr.isatty() and "tqdm.std" in  str(tqdm):
         progress = False
@@ -886,7 +886,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 logger.debug(status_msg)        
 
         safes_list.append(safes)
-        if internal:
+        if full_fig:
             safes_not_colocalized_list.append(safes_not_colocalized)
             if min_sea_percent is not None:
                 safes_sea_ok_list.append(safes_sea_ok)
@@ -894,7 +894,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         
     safes = pd.concat(safes_list,sort=False)
     safes = safes.sort_values('beginposition')
-    if internal:
+    if full_fig:
         safes_not_colocalized = pd.concat(safes_not_colocalized_list,sort=False)
         if min_sea_percent is not None:
             safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
@@ -923,7 +923,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 all_user_geom_shp.explode().plot(ax=ax, color='none' , edgecolor='green',zorder=3) 
                 handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
         
-        if internal:
+        if full_fig:
             if scihub_shapes_chunk:
                 #logger.info("scihub_shapes_chunk : %s" % str(scihub_shapes_chunk))
                 gdf_sel=gpd.GeoDataFrame({'geometry':scihub_shapes_chunk},crs=scihub_crs)
