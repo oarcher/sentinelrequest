@@ -17,7 +17,7 @@ from shapely.ops import transform
 import math 
 import pyproj
 import geo_shapely as geoshp
-from geopandas_coloc import colocalize #_apply as colocalize
+from geopandas_coloc import colocalize#_iter as colocalize
 import warnings
 from tqdm.auto import tqdm
 
@@ -66,6 +66,10 @@ earth = GeometryCollection(list(gpd.read_file(gpd.datasets.get_path('naturaleart
 
 # projection used by scihub
 scihub_crs = {'init': 'epsg:4326'}
+
+
+# empty safe gdf
+safes_empty = gpd.GeoDataFrame(columns=answer_fields,geometry='footprint',crs = scihub_crs)
 
 #download_scihub_url={  # %s : uuid
 #    "main" : "https://scihub.copernicus.eu/apihub/odata/v1/Products('%s')/$value",
@@ -142,7 +146,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
     
     retry_init = 3
     
-    safes=gpd.GeoDataFrame(columns=answer_fields,geometry='footprint',crs = scihub_crs)
+    safes=safes_empty.copy()
     start=0
     count=1 # arbitrary count > start
     retry=retry_init
@@ -397,7 +401,11 @@ def _colocalize(safes, gdf, crs=scihub_crs):
         safes_coloc.to_crs(crs,inplace=True)
     
     idx_safes = pd.Index([],name=safes.index.name)
-    idx_gdf = pd.Index([],name=gdf.index.name)
+    if isinstance(gdf.index, pd.MultiIndex):
+        empty_list=[[]]*len(gdf.index.names)
+        idx_gdf=pd.MultiIndex(levels=empty_list,codes=empty_list,names=gdf.index.names)
+    else:
+        idx_gdf = pd.Index([],name=gdf.index.name)
     for geometry in geometry_list:
         t = time.time()
         idx_safes_cur, idx_gdf_cur = colocalize(safes_crs,gdf.set_geometry(geometry))
@@ -503,7 +511,8 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     if gdf is not None:
         if not gdf.index.is_unique:
             raise IndexError("Index must be unique. Duplicate founds : %s" % list(gdf.index[gdf.index.duplicated(keep=False)].unique()))
-            
+        if len(gdf) == 0:
+            return []    
         norm_gdf=gdf.copy()
     else:
         norm_gdf = gpd.GeoDataFrame({
@@ -696,7 +705,9 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         logger.setLevel(logging.DEBUG)
         progress = False
         full_fig = True
-    
+    if gdf is not None and len(gdf) == 0:
+        logger.warning("No coloc with an empty gdf")
+        return safes_empty
     if not sys.stderr.isatty() and "tqdm.std" in  str(tqdm):
         progress = False
     
@@ -896,7 +907,6 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             if min_sea_percent is not None:
                 safes_sea_ok_list.append(safes_sea_ok)
                 safes_sea_nok_list.append(safes_sea_nok)
-        
     safes = pd.concat(safes_list,sort=False)
     safes = safes.sort_values('beginposition')
     if full_fig:
@@ -925,7 +935,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 all_user_geom = gdflist
             all_user_geom_shp = all_user_geom.geometry
             if not all(all_user_geom_shp.is_empty):
-                all_user_geom_shp.explode().plot(ax=ax, color='none' , edgecolor='green',zorder=3) 
+                all_user_geom_shp.reset_index(drop=True).explode().plot(ax=ax, color='none' , edgecolor='green',zorder=3) 
                 handles.append(mpl.lines.Line2D([], [], color='green', label='user request'))
         
         if full_fig:
