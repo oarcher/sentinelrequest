@@ -656,7 +656,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             index         : an index for the row (for ex area name, buoy id, etc ...)
             beginposition : datetime object (startdate)
             endposition   : datetime object (stopdate)
-            geometry      : shapely object
+            geometry      : shapely object (this one is optional for whole earth)
         date: 
             column name if gdf, or datetime object
         dtime : 
@@ -835,17 +835,15 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             
         else:
             safes=safes_unfiltered.copy()
-            safes['__rowindex'] = 0
-            safes.set_index('__rowindex',drop=True,inplace=True)
-            safes.rename_axis('',inplace=True)
+            safes.index = pd.Index([0]*len(safes))
         
         safes_not_colocalized = safes_unfiltered[~safes_unfiltered['filename'].isin(safes['filename'])]
         del safes_unfiltered
         
-        if duplicate:
+        if not duplicate:
             nsafes = len(safes)
             safes = remove_duplicates(safes)
-            logger.debug("removed %s duplicates" % nsafes-len(safes))
+            logger.debug("removed %s duplicates" % (nsafes-len(safes)))
         
             
         # datatake collection to be done after colocalisation
@@ -855,8 +853,10 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             safes = get_datatakes(safes, datatake=datatake, user=user,password=password,cachedir=cachedir,cacherefreshrecent=cacherefreshrecent)
             logger.debug("added %s datatakes" % (len(safes)-nsafes))
                 
-        if not duplicate:
-            safes = remove_duplicates(safes)
+            if not duplicate:
+                nsafes = len(safes)
+                safes = remove_duplicates(safes)
+                logger.debug("removed %s duplicates" % (nsafes-len(safes)))
         
         if min_sea_percent is not None:
                safes_sea_percent = (safes.area - safes.intersection(earth).area ) / safes.area * 100
@@ -964,9 +964,13 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                                        },crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
         except Exception as e:
             logger.debug("bounds fallback : %s" % str(e))
-            bounds = gpd.GeoDataFrame({'geometry': scihub_shapes_chunk 
-                                       },crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds 
-
+            try:
+                bounds = gpd.GeoDataFrame({'geometry': scihub_shapes_chunk 
+                                           },crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds 
+            except Exception as err:
+                logger.debug("bounds last fallback failed: %s" % str(e))
+                bounds = None
+                
         if bounds is not None:
             xmin,xmax = ax.get_xlim()
             ymin,ymax = ax.get_ylim()
