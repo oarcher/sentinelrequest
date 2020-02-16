@@ -17,7 +17,7 @@ from shapely.ops import transform
 import math 
 import pyproj
 import geo_shapely as geoshp
-from geopandas_coloc import colocalize#_iter as colocalize
+import geopandas_coloc
 import warnings
 from tqdm.auto import tqdm
 
@@ -362,7 +362,7 @@ def _colocalize_old(safes, gdf, crs=scihub_crs):
                 
     return safes_coloc.to_crs(crs=scihub_crs)
 
-def _colocalize(safes, gdf, crs=scihub_crs):
+def _colocalize(safes, gdf, crs=scihub_crs,coloc=[geopandas_coloc.colocalize_loop]):
     """colocalize safes and gdf
     if crs is default and 'geometry_east' and 'geometry_west' exists in gdf,
     they will be used instead of .geometry (scihub mode)
@@ -371,7 +371,14 @@ def _colocalize(safes, gdf, crs=scihub_crs):
     
     the returned safes will be returned in scihub crs (ie 4326 : not the user specified)
     """
+    
+    # initialise an empty index for both gdf
+    idx_safes = safes.index.delete(slice(None))
+    idx_gdf = gdf.index.delete(slice(None))
+    
     if len(safes) == 0:
+        # set same index as gdf, even if empty, to not throw an error on possible merge later 
+        safes.index = idx_gdf
         return safes
     gdf  = gdf.copy()
     gdf['geometry'] = gdf.geometry
@@ -400,19 +407,21 @@ def _colocalize(safes, gdf, crs=scihub_crs):
         safes_crs.to_crs(crs,inplace=True)
         safes_coloc.to_crs(crs,inplace=True)
     
-    idx_safes = pd.Index([],name=safes.index.name)
-    if isinstance(gdf.index, pd.MultiIndex):
-        empty_list=[[]]*len(gdf.index.names)
-        idx_gdf=pd.MultiIndex(levels=empty_list,codes=empty_list,names=gdf.index.names)
-    else:
-        idx_gdf = pd.Index([],name=gdf.index.name)
     for geometry in geometry_list:
         t = time.time()
-        idx_safes_cur, idx_gdf_cur = colocalize(safes_crs,gdf.set_geometry(geometry))
+        idx_safes_cur, idx_gdf_cur = coloc[0](safes_crs,gdf.set_geometry(geometry))
+        logger.debug('sub coloc %s done in %ds' % (  coloc[0].__name__ , time.time() -t ))
         idx_safes = idx_safes.append(idx_safes_cur)
         idx_gdf = idx_gdf.append(idx_gdf_cur)
-        logger.debug('sub new coloc done in %ds' % (time.time() -t ))
-    
+        for imethod in range(1,len(coloc)):
+            # check with other coloc method
+            t = time.time()
+            idx_safes_cur_check, idx_gdf_cur_check = coloc[imethod](safes_crs,gdf.set_geometry(geometry))
+            logger.debug('sub coloc %s done in %.1fs' % (  coloc[imethod].__name__ , time.time() -t ))
+            if not (idx_gdf_cur_check.sort_values().equals(idx_gdf_cur.sort_values()) and idx_safes_cur_check.sort_values().equals(idx_safes_cur.sort_values())):
+                raise RuntimeError('difference between colocation method')
+                    
+                
     safes_coloc = safes.loc[idx_safes]
     safes_coloc.index=idx_gdf
         
@@ -846,7 +855,7 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             
         else:
             safes=safes_unfiltered.copy()
-            safes.index = pd.Index([0]*len(safes))
+            safes.index = gdf.index.delete(slice(None))
         
         safes_not_colocalized = safes_unfiltered[~safes_unfiltered['filename'].isin(safes['filename'])]
         del safes_unfiltered
