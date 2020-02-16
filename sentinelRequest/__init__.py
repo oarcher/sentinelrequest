@@ -854,8 +854,8 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             # end tmp validation
             
         else:
+            # no geometry, so whole earth, and no index from gdf
             safes=safes_unfiltered.copy()
-            safes.index = gdf.index.delete(slice(None))
         
         safes_not_colocalized = safes_unfiltered[~safes_unfiltered['filename'].isin(safes['filename'])]
         del safes_unfiltered
