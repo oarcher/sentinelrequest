@@ -14,6 +14,7 @@ import shapely.wkt as wkt
 import shapely.ops as ops 
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, LineString, box
 from shapely.ops import transform
+import shapely
 import math 
 import pyproj
 import geo_shapely as geoshp
@@ -68,10 +69,9 @@ earth = GeometryCollection(list(gpd.read_file(gpd.datasets.get_path('naturaleart
 # projection used by scihub
 if hasattr(pyproj, 'CRS') and version.parse(gpd.__version__) >= version.parse("0.7.0"):
     # pyproj.CRS is handled by geopandas since 0.7.0
-    logger.warning('using new pyproj.CRS for geopandas')
     scihub_crs = pyproj.CRS("epsg:4326")
 else:
-    logger.warning("using old pyproj/geopandas")
+    logger.warning("pyproj < 2.0 and geopandas < 0.7 are deprecated")
     scihub_crs = {'init':'epsg:4326'}
 
 # empty safe gdf
@@ -496,14 +496,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         norm_gdf.crs = scihub_crs
     
     # scihub requests are enlarged/simplified
-    userProj = pyproj.Proj(norm_gdf.crs)
-    if hasattr(userProj,'is_geographic' ):
-        # for pyproj >=2
-        is_latlong = userProj.is_geographic
-    else:
-        # for pyproj <2
-        is_latlong = userProj.is_latlong()
-    if is_latlong: 
+    if is_geographic(norm_gdf.crs): 
         buff=2
         simp=1.9
     else:
@@ -519,7 +512,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             axis=1)
         
     
-    if norm_gdf.crs['init'] != scihub_crs['init']:
+    if not is_geographic(norm_gdf.crs):
         # convert scihub geometry to lon/lat (original geometry untouched !)
         norm_gdf_ori = norm_gdf.copy()
         crs_ori = norm_gdf.crs
@@ -529,7 +522,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
     
         # check valid output geometry
         if not all(norm_gdf.set_geometry('scihub_geometry').geometry.is_valid):
-            raise NotImplementedError("Internal error converting crs %s to %s" % (norm_gdf.crs['init'] , scihub_crs['init']))
+            raise NotImplementedError("Internal error converting crs %s to %s" % (norm_gdf.crs , scihub_crs))
             # an output geometry is invalid if it include 4326 singularity (ie pole) 
             all_count = len(norm_gdf)
             valid = norm_gdf.is_valid
@@ -540,9 +533,9 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             
             norm_gdf.loc[~valid,norm_gdf.geometry.name] = corrected.to_crs(scihub_crs)
             if not all(norm_gdf.is_valid):
-                raise ValueError("unable to convert to crs %s" % scihub_crs['init'])
+                raise ValueError("unable to convert to crs %s" % scihub_crs)
             
-            logging.error("Converted %s/%s problematic projection %s -> %s geometries " % (len(corrected),all_count,crs_ori , scihub_crs['init']))
+            logging.error("Converted %s/%s problematic projection %s -> %s geometries " % (len(corrected),all_count,crs_ori , scihub_crs))
         
         # encapsulate geometry in collection to presereve large dlon
         norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').geometry.apply(lambda s : GeometryCollection([s]))
@@ -874,7 +867,11 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
             safes_sea_ok = pd.concat(safes_sea_ok_list,sort=False)
             safes_sea_nok = pd.concat(safes_sea_nok_list,sort=False)
     
-    logger.info("Total : %s SAFES colocated with %s (%s uniques)." % (len(safes),crs['init'],len(safes['filename'].unique())))
+    try:
+        srs = crs.srs
+    except:
+        srs = crs['init'] # should be deprecated
+    logger.info("Total : %s SAFES colocated with %s (%s uniques)." % (len(safes),srs,len(safes['filename'].unique())))
     
     if fig is not None:
         uniques_safes = safes.drop_duplicates('filename')
@@ -928,9 +925,13 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         
         bounds = None
         try:
+            # disable shapely errors, they are catched
+            old_log = shapely.geos.LOG.getEffectiveLevel()
+            shapely.geos.LOG.setLevel(logging.CRITICAL)
             bounds = gpd.GeoDataFrame({'geometry': 
                                        [ box(*uniques_safes.total_bounds), box(*safes_not_colocalized.total_bounds) ] +  scihub_shapes_chunk 
                                        },crs=scihub_crs).to_crs(crs=crs).buffer(0).total_bounds
+            shapely.geos.LOG.setLevel(old_log)
         except Exception as e:
             logger.debug("bounds fallback : %s" % str(e))
             try:
