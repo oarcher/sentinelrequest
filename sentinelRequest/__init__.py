@@ -20,6 +20,7 @@ import geo_shapely as geoshp
 import geopandas_coloc
 import warnings
 from tqdm.auto import tqdm
+from packaging import version
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -65,8 +66,13 @@ urlapi='https://scihub.copernicus.eu/apihub/search'
 earth = GeometryCollection(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry )).buffer(0)
 
 # projection used by scihub
-scihub_crs = {'init': 'epsg:4326'}
-
+if hasattr(pyproj, 'CRS') and version.parse(gpd.__version__) >= version.parse("0.7.0"):
+    # pyproj.CRS is handled by geopandas since 0.7.0
+    logger.warning('using new pyproj.CRS for geopandas')
+    scihub_crs = pyproj.CRS("epsg:4326")
+else:
+    logger.warning("using old pyproj/geopandas")
+    scihub_crs = {'init':'epsg:4326'}
 
 # empty safe gdf
 safes_empty = gpd.GeoDataFrame(columns=answer_fields,geometry='footprint',crs = scihub_crs)
@@ -104,6 +110,17 @@ xslt='''<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Tran
 
 
 remove_dom=etree.XSLT(etree.fromstring(xslt))
+
+def is_geographic(crs):
+    """ return True if crs is geographic. 
+        once old pyproj/geopandas deprecated, this function should be replaced
+        with crs.is_geographic (or pyproj.CRS(crs).is_geographic )
+    """
+    try:
+        return pyproj.CRS(crs).is_geographic
+    except:
+        # old pyproj
+        return pyproj.Proj(**crs).is_latlong()
 
 
 def download_scihub(filename,user='guest', password='guest'):
@@ -293,75 +310,6 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
         return safes
     
     
-def _colocalize_old(safes, gdf, crs=scihub_crs):
-    """colocalize safes and gdf
-    if crs is default and 'geometry_east' and 'geometry_west' exists in gdf,
-    they will be used instead of .geometry (scihub mode)
-    
-    if crs is not default the crs will be used on .geometry for the coloc.
-    
-    the returned safes will be returned in scihub crs (ie 4326 : not the user specified)
-    """
-    
-    gdf  = gdf.copy()
-    gdf['geometry'] = gdf.geometry
-    
-    safes_coloc = safes.iloc[0:0,:].copy()
-    safes_coloc.crs = scihub_crs
-    scihub_mode = False
-    
-    safes_crs = safes.copy()
-    
-    if crs['init'] == scihub_crs['init'] and 'geometry_east' in gdf and 'geometry_west' in gdf:
-        scihub_mode = True
-        # remove unused geometry
-        old_geometry = gdf.geometry.name
-        gdf.set_geometry('geometry_east',inplace=True)
-        gdf.drop(labels=[old_geometry],inplace=True,axis=1)
-    elif crs['init'] != scihub_crs['init']:
-        gdf.set_geometry('geometry',inplace=True)
-        gdf.to_crs(crs,inplace=True)
-        safes_crs.to_crs(crs,inplace=True)
-        safes_coloc.to_crs(crs,inplace=True)
-        
-    for gdf_index , gdf_item in gdf.iterrows():
-        begindate=gdf_item.beginposition 
-        enddate=gdf_item.endposition
-        
-        if (begindate is not None) and  (enddate is not None):
-        
-            latest_start = safes_crs.beginposition.copy()
-            latest_start[latest_start <  begindate] = begindate
-            earliest_end = safes_crs.endposition.copy()
-            earliest_end[earliest_end >  enddate] = enddate
-            overlap = (earliest_end - latest_start)
-            
-            timeok_safes = safes_crs[overlap>=datetime.timedelta(0)]
-        else:
-            timeok_safes = safes_crs
-            
-            
-            
-        if 'geometry' in gdf_item:
-            intersect_safes = timeok_safes[
-                timeok_safes.contains(gdf_item['geometry']) | 
-                timeok_safes.intersects(gdf_item['geometry']) ].copy()
-        elif scihub_mode:
-            intersect_safes = pd.concat([
-                timeok_safes.contains(gdf_item['geometry_east']) | timeok_safes[timeok_safes.intersects(gdf_item['geometry_east'])].copy(),
-                timeok_safes.contains(gdf_item['geometry_west']) | timeok_safes[timeok_safes.intersects(gdf_item['geometry_west'])].copy()
-                ])
-        else:
-            # if the user gave no geometry
-            intersect_safes = timeok_safes.copy()
-            
-        intersect_safes['__rowindex'] = gdf_index
-        intersect_safes.set_index('__rowindex',drop=True,inplace=True)
-        intersect_safes.rename_axis(gdf.index.name,inplace=True)
-        safes_coloc = safes_coloc.append(intersect_safes)        
-                
-    return safes_coloc.to_crs(crs=scihub_crs)
-
 def _colocalize(safes, gdf, crs=scihub_crs,coloc=[geopandas_coloc.colocalize_loop]):
     """colocalize safes and gdf
     if crs is default and 'geometry_east' and 'geometry_west' exists in gdf,
@@ -394,14 +342,16 @@ def _colocalize(safes, gdf, crs=scihub_crs,coloc=[geopandas_coloc.colocalize_loo
     safes_crs = safes.copy()
     
     geometry_list = ['geometry']
-    if crs['init'] == scihub_crs['init'] and 'geometry_east' in gdf and 'geometry_west' in gdf:
+    if is_geographic(crs) and 'geometry_east' in gdf and 'geometry_west' in gdf:
+        # never reached. replaced with 'scihub_geometry_east_list'
+        raise DeprecationWarning('This should be deprecated')
         scihub_mode = True
         # remove unused geometry
         old_geometry = gdf.geometry.name
         gdf.set_geometry('geometry_east',inplace=True)
         gdf.drop(labels=[old_geometry],inplace=True,axis=1)
         geometry_list = ['geometry_east','geometry_west']
-    elif crs['init'] != scihub_crs['init']:
+    elif not is_geographic(crs):
         gdf.set_geometry('geometry',inplace=True)
         gdf.to_crs(crs,inplace=True)
         safes_crs.to_crs(crs,inplace=True)
@@ -546,7 +496,7 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         norm_gdf.crs = scihub_crs
     
     # scihub requests are enlarged/simplified
-    userProj = pyproj.Proj(init=norm_gdf.crs['init'])
+    userProj = pyproj.Proj(norm_gdf.crs)
     if hasattr(userProj,'is_geographic' ):
         # for pyproj >=2
         is_latlong = userProj.is_geographic
