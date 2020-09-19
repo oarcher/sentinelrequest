@@ -779,24 +779,9 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
         elapsed_coloc = 0
         if gdf is not None:
             t=time.time()
-            safes =_colocalize(safes_unfiltered, gdf_slice, crs = crs)
+            safes =_colocalize(safes_unfiltered, gdf_slice, crs = crs, progress=progress)
             elapsed_coloc = time.time()-t
             logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes),elapsed_coloc))
-            
-            # tmp validation with old method
-            if False:
-                t=time.time()
-                safes_old =_colocalize_old(safes_unfiltered, gdf_slice, crs = crs)
-                elapsed_coloc = time.time()-t
-                logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes_old),elapsed_coloc))
-                safes_diff = pd.concat([safes,safes_old],sort=False).drop_duplicates('filename',keep=False)
-                if len(safes_diff):
-                    safes_diff.reset_index(inplace=True)
-                    logger.error("found %d diff with old coloc" % len(safes_diff))
-                    safes_recheck = _colocalize(safes_diff, gdf_slice, crs = crs)
-                    raise RuntimeError("coloc validation error")
-            # end tmp validation
-            
         else:
             # no geometry, so whole earth, and no index from gdf
             safes=safes_unfiltered.copy()
