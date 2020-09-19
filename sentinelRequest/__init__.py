@@ -310,7 +310,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
         return safes
     
     
-def _colocalize(safes, gdf, crs=scihub_crs,coloc=[geopandas_coloc.colocalize_loop]):
+def _colocalize(safes, gdf, crs=scihub_crs,coloc=[geopandas_coloc.colocalize_loop],progress=True):
     """colocalize safes and gdf
     if crs is default and 'geometry_east' and 'geometry_west' exists in gdf,
     they will be used instead of .geometry (scihub mode)
@@ -359,14 +359,14 @@ def _colocalize(safes, gdf, crs=scihub_crs,coloc=[geopandas_coloc.colocalize_loo
     
     for geometry in geometry_list:
         t = time.time()
-        idx_safes_cur, idx_gdf_cur = coloc[0](safes_crs,gdf.set_geometry(geometry))
+        idx_safes_cur, idx_gdf_cur = coloc[0](safes_crs,gdf.set_geometry(geometry),progress=progress)
         logger.debug('sub coloc %s done in %ds' % (  coloc[0].__name__ , time.time() -t ))
         idx_safes = idx_safes.append(idx_safes_cur)
         idx_gdf = idx_gdf.append(idx_gdf_cur)
         for imethod in range(1,len(coloc)):
             # check with other coloc method
             t = time.time()
-            idx_safes_cur_check, idx_gdf_cur_check = coloc[imethod](safes_crs,gdf.set_geometry(geometry))
+            idx_safes_cur_check, idx_gdf_cur_check = coloc[imethod](safes_crs,gdf.set_geometry(geometry),progress=progress)
             logger.debug('sub coloc %s done in %.1fs' % (  coloc[imethod].__name__ , time.time() -t ))
             if not (idx_gdf_cur_check.sort_values().equals(idx_gdf_cur.sort_values()) and idx_safes_cur_check.sort_values().equals(idx_safes_cur.sort_values())):
                 raise RuntimeError('difference between colocation method')
