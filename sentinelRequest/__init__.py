@@ -503,8 +503,9 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         # assume meters
         buff=200*1000
         simp=190*1000
-   
-    norm_gdf['scihub_geometry'] = norm_gdf.geometry.buffer(buff).simplify(simp)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        norm_gdf['scihub_geometry'] = norm_gdf.geometry.buffer(buff).simplify(simp)
     if crs_ori is None:
         # re apply smallest dlon if needed
         norm_gdf['scihub_geometry'] = norm_gdf.set_geometry('scihub_geometry').apply(
