@@ -4,7 +4,7 @@ import os,sys
 import datetime
 import time
 import requests
-from lxml import etree
+from lxml import etree, html
 import logging
 from collections import OrderedDict
 import hashlib
@@ -34,6 +34,12 @@ if sys.gettrace():
     pd.set_option('display.width', 1000)
 else:
     logger.setLevel(logging.INFO)
+    
+try:
+    from html2text import html2text
+except:
+    logger.info("html2text not found. Consider 'pip install html2text' for better error messages.")
+    html2text = lambda x: x
     
 # default values (user may change them)
 default_user='guest'
@@ -125,13 +131,40 @@ def is_geographic(crs):
         return pyproj.Proj(**crs).is_latlong()
 
 
-def download_scihub(filename,user='guest', password='guest'):
-    safe=scihubQuery(filename=filename, user=user, password=password)
-    urldl=download_scihub_url['ql'] % safe[filename]['uuid']
-    # todo : use wget for downloads
-    xmlout=requests.get(urldl,auth=(user,password))
-    
-    return xmlout
+def nice_string(obj):
+    """try to convert obj to nice string"""
+    xml = False
+    string=str(obj)
+    try:
+        # xml ?
+        try:
+            # if xml string
+            obj = etree.fromstring(obj)
+        except:
+            # assume already etree
+            pass
+        etree.indent(obj, space="  ")
+        string = etree.tostring(obj, pretty_print=True).decode('unicode_escape')
+        xml = True
+    except:
+        pass
+
+    try:
+        obj = obj.decode('unicode_escape')
+    except:
+        pass
+
+    if not xml:
+        # html string ?
+        try:
+            check_html = html.fromstring(obj)
+            if check_html.find('.//*') is not None:
+                string = html2text(obj)
+        except:
+            pass
+
+    return string
+
 
 def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacherefreshrecent=None , return_cache_status=False):
     """
@@ -192,6 +225,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
                     
                 try:
                     root = remove_dom(etree.parse(xml_cachefile))
+                    int(root.find(".//totalResults").text)  # this should enought to test the xml is ok
                 except Exception as e:
                     logger.warning('removing invalid xml_cachefile %s : %s' % (xml_cachefile,str(e)))
                     os.unlink(xml_cachefile)
@@ -208,45 +242,43 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
             try:
                 root = remove_dom(etree.fromstring(xmlout.content))
             except Exception as e:
-                try:
-                    import html2text
-                    content=html2text.html2text(str(xmlout.content))
-                except:
-                    logger.info("html2text not found. dumping raw html")
-                    content=str(xmlout.content)
-                    
+                content=nice_string(xmlout.content)
+
                 if 'Timeout occured while waiting response from server' in content:
                     retry-=1
                     logger.warning('Timeout while processing request : %s' % str_query)
                     logger.warning('left retry : %s' % retry)
                     if retry == 0:
-                        raise ConnectionError('Giving up')
+                        raise_from(ConnectionError('Giving up trying to connect % ' % urlapi),None)
                     continue
                     
                     
                 logger.critical("Error while parsing xml answer")
                 logger.critical("query was: %s" % str_query )
-                logger.critical("answer is: \n %s" % content)
+                logger.critical("answer is: \n {}".format(content))
                 raise_from(ValueError('scihub query error'), None)
             
             if xml_cachefile is not None:
                 try:
-                    with open(xml_cachefile,'wb') as f:
-                        f.write(etree.tostring(root, pretty_print=True))
-                except Exception as e:
-                    logger.warning('unable to write xml_cachefile %s : %s' % (xml_cachefile, str(e)))
-                
-            
+                    int(root.find(".//totalResults").text)  # this should enought to test the xml is ok
+                    try:
+                        with open(xml_cachefile,'w') as f:
+                            f.write(nice_string(root))
+                    except Exception as e:
+                        logger.warning('unable to write xml_cachefile %s : %s' % (xml_cachefile, str(e)))
+                except:
+                    logger.warning('not writing corrupted xml cachefile')
+
         
         #<opensearch:totalResults>442</opensearch:totalResults>\n
         try:
             count=int(root.find(".//totalResults").text)
         except:
             # there was an error in request
-            logger.critical("invalid request : %s" % str_query)
+            logger.error('response was:\n {}'.format(nice_string(root)))
             if xml_cachefile is not None and os.path.exists(xml_cachefile):
                 os.unlink(xml_cachefile)
-            break
+            raise_from(ValueError("invalid request : %s" % str_query), None)
         
         # reset retry since last request is ok
         retry = retry_init
