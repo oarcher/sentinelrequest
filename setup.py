@@ -11,5 +11,5 @@ setup(name='sentinelRequest',
       setup_requires=['setuptools_scm'],
       zip_safe=False,
       scripts=['bin/sentinelRequest'],
-      install_requires=[ 'future','geopandas', 'requests',  'lxml',  'fiona' , 'html2text', 'geo-shapely', 'geopandas-coloc', 'tqdm' ]
+      install_requires=['packaging', 'future','geopandas', 'requests',  'lxml',  'fiona' , 'html2text', 'geo-shapely', 'geopandas-coloc', 'tqdm' ]
 )

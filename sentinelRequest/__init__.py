@@ -22,6 +22,7 @@ import geo_shapely as geoshp
 import geopandas_coloc
 import warnings
 from tqdm.auto import tqdm
+import pytz
 from packaging import version
 
 logging.basicConfig()
@@ -153,9 +154,9 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
     def decode_date(strdate):
         # date format can change ..
         try:
-            d = datetime.datetime.strptime(strdate,dateformat)
+            d = datetime.datetime.strptime(strdate,dateformat).replace(tzinfo=pytz.UTC)
         except:
-            d = datetime.datetime.strptime(strdate[0:19],dateformat_alt)
+            d = datetime.datetime.strptime(strdate[0:19],dateformat_alt).replace(tzinfo=pytz.UTC)
         return d
     decode_tags = {
         "int"   : int,
@@ -292,7 +293,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
 
             # remove cachefile if some safes are recents
             if xml_cachefile is not None and os.path.exists(xml_cachefile):
-                dateage=(datetime.datetime.utcnow() - chunk_safes['beginposition'].max()) # used for cache age
+                dateage=(datetime.datetime.utcnow().replace(tzinfo=pytz.UTC) - chunk_safes['beginposition'].max()) # used for cache age
                 if dateage < cacherefreshrecent:
                     logger.debug("To recent answer. Removing cachefile %s" % xml_cachefile)
                     os.unlink(xml_cachefile)
@@ -484,11 +485,21 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
             },geometry='geometry',index=[0],crs=scihub_crs)
         # no slicing
         timedelta_slice = None
+
+
+    # convert naives dates to utc
+    for date_col in norm_gdf.select_dtypes(include=['datetime64']).columns:
+        try:
+            norm_gdf[date_col] = norm_gdf[date_col].dt.tz_localize('UTC')
+            logger.warning("Assuming UTC date on col %s" % date_col)
+        except TypeError:
+            # already localized
+            pass
     
     # check valid input geometry
     if not all(norm_gdf.is_valid):
         raise ValueError("Invalid geometries found. Check them with gdf.is_valid")
-   
+
     norm_gdf['wrap_dlon'] = False
     
     crs_ori = norm_gdf.crs
@@ -573,9 +584,9 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         maxdate=norm_gdf['endposition'].max()
         # those index will need to be time expanded
         idx_to_expand = norm_gdf.index[( norm_gdf['endposition'] - norm_gdf['beginposition'] ) > timedelta_slice]
-        if maxdate > datetime.datetime.utcnow():
+        if maxdate > datetime.datetime.utcnow().replace(tzinfo=pytz.UTC):
             logger.info("%s is future. Truncating." % maxdate)
-            maxdate = datetime.datetime.utcnow() + datetime.timedelta(days=1)
+            maxdate = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC) + datetime.timedelta(days=1)
         if (mindate == mindate) and (maxdate == maxdate): # non nan
             gdf_slices = []
             slice_begin = mindate
