@@ -7,9 +7,9 @@ setup(name='sentinelRequest',
       author_email = "Olivier.Archer@ifremer.fr",
       license='GPL',
       packages=['sentinelRequest'],
-      use_scm_version={'version_scheme' : 'python-simplified-semver'},
+      use_scm_version=True,
       setup_requires=['setuptools_scm'],
       zip_safe=False,
       scripts=['bin/sentinelRequest'],
-      install_requires=[ 'packaging','geopandas', 'requests',  'lxml',  'fiona' , 'html2text', 'geo-shapely', 'geopandas-coloc', 'tqdm' ]
+      install_requires=[ 'future','geopandas', 'requests',  'lxml',  'fiona' , 'html2text', 'geo-shapely', 'geopandas-coloc', 'tqdm' ]
 )

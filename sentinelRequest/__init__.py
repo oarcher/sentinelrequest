@@ -1,4 +1,5 @@
 from __future__ import print_function
+from future.utils import raise_from
 import os,sys
 import datetime
 import time
@@ -199,11 +200,13 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
             cache_status = True
         else:
             # request not cached
-            xmlout=requests.get(urlapi,auth=(user,password),params=params)
-        
+            try:
+                xmlout=requests.get(urlapi,auth=(user,password),params=params)
+            except:
+                raise_from(ConnectionError("Unable to connect to %s" % urlapi),None)
             try:
                 root = remove_dom(etree.fromstring(xmlout.content))
-            except:
+            except Exception as e:
                 try:
                     import html2text
                     content=html2text.html2text(str(xmlout.content))
@@ -223,7 +226,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
                 logger.critical("Error while parsing xml answer")
                 logger.critical("query was: %s" % str_query )
                 logger.critical("answer is: \n %s" % content)
-                raise ValueError('scihub query error')
+                raise_from(ValueError('scihub query error'), None)
             
             if xml_cachefile is not None:
                 try:
@@ -298,7 +301,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
             safes=safes.sort_values('beginposition')
             safes.reset_index(drop=True,inplace=True)
             safes = safes.set_geometry('footprint')
-            
+
             
             
         #safes['footprint'] = gpd.GeoSeries(safes['footprint'])
@@ -310,7 +313,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
         return safes
     
     
-def _colocalize(safes, gdf, crs=scihub_crs,coloc=[geopandas_coloc.colocalize_loop],progress=True):
+def _colocalize(safes, gdf, crs=scihub_crs,coloc=[geopandas_coloc.colocalize_loop], progress=False):
     """colocalize safes and gdf
     if crs is default and 'geometry_east' and 'geometry_west' exists in gdf,
     they will be used instead of .geometry (scihub mode)
@@ -503,7 +506,9 @@ def normalize_gdf(gdf,startdate=None,stopdate=None,date=None,dtime=None,timedelt
         # assume meters
         buff=200*1000
         simp=190*1000
+
     with warnings.catch_warnings():
+        # disable geographic warning
         warnings.simplefilter("ignore")
         norm_gdf['scihub_geometry'] = norm_gdf.geometry.buffer(buff).simplify(simp)
     if crs_ori is None:
@@ -808,10 +813,13 @@ def scihubQuery(gdf=None,startdate=None,stopdate=None,date=None,dtime=None,timed
                 logger.debug("removed %s duplicates" % (nsafes-len(safes)))
         
         if min_sea_percent is not None:
-               safes_sea_percent = (safes.area - safes.intersection(earth).area ) / safes.area * 100
-               safes_sea_ok = safes[safes_sea_percent >= min_sea_percent ]
-               safes_sea_nok = safes[safes_sea_percent < min_sea_percent ]
-               safes = safes_sea_ok
+            with warnings.catch_warnings():
+                # disable geographic warning
+                warnings.simplefilter("ignore")
+                safes_sea_percent = (safes.area - safes.intersection(earth).area ) / safes.area * 100
+            safes_sea_ok = safes[safes_sea_percent >= min_sea_percent ]
+            safes_sea_nok = safes[safes_sea_percent < min_sea_percent ]
+            safes = safes_sea_ok
                
         # sort by sensing date  
         safes=safes.sort_values('beginposition')
