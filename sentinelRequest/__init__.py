@@ -1,10 +1,11 @@
 from __future__ import print_function
 from future.utils import raise_from
-import os, sys
+import os
+import sys
 import datetime
 import time
 import requests
-from lxml import etree, html
+from lxml import etree, html, objectify
 import logging
 from collections import OrderedDict
 import hashlib
@@ -24,6 +25,10 @@ import warnings
 from tqdm.auto import tqdm
 import pytz
 from packaging import version
+import tempfile
+import re
+import string
+import zipfile
 
 logging.basicConfig()
 logger = logging.getLogger("sentinelRequest")
@@ -48,6 +53,8 @@ default_cachedir = None
 default_cacherefreshrecent = datetime.timedelta(days=7)
 default_timedelta_slice = datetime.timedelta(weeks=1)
 default_filename = 'S1*'
+default_store = '/tmp/sentinelRequest/store'
+default_zipdir = '/tmp/sentinelRequest/zip'
 
 # all wkt objects feeded to scihub will keep rounding_precision digits (1 = 0.1 )
 # this will allow to not have too long requests
@@ -161,6 +168,191 @@ def nice_string(obj):
             pass
 
     return string
+
+
+def wget(url, outfile, progress=True, user=None, password=None, desc=''):
+
+    # get default keywords values
+    if user is None:
+        user = default_user
+    if password is None:
+        password = default_password
+
+    if os.path.exists(outfile):
+        return 303, outfile
+
+    response = requests.get(url, stream=True, auth=(user, password))
+    if response.status_code == 202:
+        # not online
+        return response.status_code, None
+    elif response.status_code != 200:
+        logger.debug('strange status %d for %s' % (response.status_code, outfile))
+
+    length = int(response.headers.get('content-length', 0))
+
+    # make a tempfile
+    basename = os.path.basename(outfile)
+    dirname = os.path.dirname(outfile)
+    prefix, suffix = os.path.splitext(basename)
+    progress_bar = tqdm(total=length, unit='iB', unit_scale=True, desc=desc + basename, leave=False, disable=not progress)
+    with tempfile.NamedTemporaryFile(suffix='.tmp', prefix=prefix, dir=dirname, delete=False) as handle:
+        chunk_size = 10*1024**2
+        for data in response.iter_content(chunk_size=chunk_size):
+            progress_bar.update(len(data))
+            handle.write(data)
+        os.rename(handle.name, outfile)
+    progress_bar.close()
+    return response.status_code, outfile
+
+
+def safe_dir(filename, path='.', check_exists=False):
+    """
+    get dir path from safe filename.
+
+    Parameters
+    ----------
+    filename: str
+        SAFE filename, with no dir, and valid nomenclature
+    path: str or list of str
+        path template
+    check_exists: bool
+        if True and path doesn't exists, return None
+
+    Returns
+    -------
+    str
+        path from template
+
+    """
+    regex = re.compile(
+        "(...)_(..)_(...)(.)_(.)(.)(..)_(........T......)_(........T......)_(......)_(......)_(....).SAFE")
+    template = string.Template(
+        "${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}${POL}_${STARTDATE}_${STOPDATE}_${ORBIT}_${TAKEID}_${PRODID}.SAFE")
+    regroups = re.search(regex, filename)
+    tags = {}
+    for itag, tag in enumerate(re.findall(r"\$\{([\w]+)\}", template.template), start=1):
+        tags[tag] = regroups.group(itag)
+
+    startdate = datetime.datetime.strptime(
+        tags["STARTDATE"], '%Y%m%dT%H%M%S').replace(tzinfo=pytz.UTC)
+    tags['SAFE'] = regroups.group(0)
+    tags["missionid"] = tags["MISSIONID"][1:3].lower()
+    tags["year"] = startdate.strftime("%Y")
+    tags["doy"] = startdate.strftime("%j")
+    if isinstance(path, str):
+        path = [path]
+    filepath = None
+    for p in path:
+        filepath = string.Template(p).substitute(tags)
+        if check_exists:
+            if not filepath.endswith(filename):
+                filepath = os.path.join(filepath, filename)
+            if not os.path.exists(filepath):
+                filepath = None
+        else:
+            break
+    return filepath
+
+
+def get_scihub_odata(odata_url):
+    """
+    get odata attribute from odata url.
+    odata result are not cached, because they are volatiles (ie online status)
+    """
+    odata = {}
+    xmlout = requests.get(odata_url, auth=(default_user, default_password))
+    root = objectify.fromstring(xmlout.content)
+    odata['Online'] = root.find('*/d:Online', namespaces=root.nsmap).pyval
+    odata['OnDemand'] = root.find('*/d:OnDemand', namespaces=root.nsmap).pyval
+    return pd.Series(odata)
+
+
+def scihub_download(safe, destination=default_store, zip_dir=default_zipdir, desc='', progress=True):
+    # odata = get_odata(safe['url_altrequests.get(url, stream=True, auth=(user, password))ernative'])
+    # if not odata['Online']:
+    #    sr.logger('%s not yet online' % safe['filename'])
+    #    # ask
+
+    safe['Online'], safe['OnDemand'], safe['badzip'] = None, None, True
+    parent_dir = safe_dir(safe['filename'], path=destination)
+    path = os.path.join(parent_dir, safe['filename'])
+    safe['path'] = None
+    if os.path.exists(os.path.join(path, 'manifest.safe')):
+        safe['path'] = path
+        return safe
+
+    os.makedirs(zip_dir, exist_ok=True)
+    status, filezip = wget(safe['url'], os.path.join(zip_dir, "%s.zip" % safe['filename']),desc=desc)
+    if status == 202:
+        logger.info('%s not yet online' % safe['filename'])
+
+    if status != 200:
+        odata = get_scihub_odata(safe['url_alternative'])
+        safe['odata_Online'], safe['odata_OnDemand'] = odata['Online'], odata['OnDemand']
+    safe['zipfilepath'] = filezip
+    if safe['zipfilepath'] is not None:
+        os.makedirs(parent_dir, exist_ok=True)
+        partial_unzip = os.path.join(zip_dir, 'partial')
+        os.makedirs(partial_unzip, exist_ok=True)
+        try:
+            with zipfile.ZipFile(safe['zipfilepath'], 'r') as zip_ref:
+                zip_ref.extractall(partial_unzip)
+            safe['badzip'] = False
+        except zipfile.BadZipFile:
+            logger.info('remove bad zip  %s' % safe['zipfilepath'])
+            os.unlink(safe['zipfilepath'])
+        else:
+            os.rename(os.path.join(partial_unzip, safe['filename']), path)
+            safe['path'] = path
+    return safe
+
+
+def download_from_df(safes, store='.', zip_dir='./zip', progress=True):
+    if 'path' not in safes:
+        safes['path'] = safes['filename'].apply(
+            lambda safe: safe_dir(safe, path='/home/oarcher/SAFE', check_exists=True))
+    missings = safes[~safes['path'].notnull()]
+    global_count = len(missings)
+    logger.info("need to download %d/%d safes" % (global_count, len(safes)))
+    download_list = []
+
+    current = 1
+    error_count = {}
+    while len(missings) != 0:
+        new_missings = missings
+        start_len = len(download_list)
+        for idx, missing in missings.iterrows():
+            downloaded = scihub_download(
+                missing, destination=store,
+                zip_dir=zip_dir, desc='%03d/%03d ' % (current, global_count), progress=progress)
+            if downloaded['path']:
+                current = current + 1
+                download_list.append(downloaded)
+                new_missings = new_missings[new_missings['filename'] != downloaded['filename']]
+            else:
+                if downloaded['filename'] not in error_count:
+                    error_count[downloaded['filename']] = 0
+                error_count[downloaded['filename']] = error_count[downloaded['filename']] + 1
+                logger.warning('download failed (#%d)for %s' % (error_count[downloaded['filename']], downloaded['filename']))
+                if error_count[downloaded['filename']] > 2:
+                    logger.warning('to many errors on %s. Skipping' % downloaded['filename'])
+                    new_missings = new_missings[new_missings['filename'] != downloaded['filename']]
+
+        missings = new_missings
+        stop_len = len(download_list)
+        count = stop_len - start_len
+        if count == 0 and len(missings) != 0:
+            logger.info("waiting for one of %s safes to be online" %
+                        len(missings))
+            time.sleep(30)
+
+    logger.info('%d safes downloaded' % len(download_list))
+    safes.drop(['odata_Online', 'odata_OnDemand', 'badzip'],
+               errors='ignore', inplace=True)
+    safes['path'] = safes['filename'].apply(lambda safe: safe_dir(
+        safe, path=store, check_exists=True))
+
+    return safes
 
 
 def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacherefreshrecent=None,
@@ -659,7 +851,7 @@ def normalize_gdf(gdf, startdate=None, stopdate=None, date=None, dtime=None, tim
 
 def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, timedelta_slice=None, filename=None,
                 datatake=0, duplicate=False, query=None, user=None, password=None, min_sea_percent=None, fig=None,
-                cachedir=None, cacherefreshrecent=None, progress=True, verbose=False, full_fig=False):
+                cachedir=None, cacherefreshrecent=None, progress=True, verbose=False, full_fig=False, store=None, zip_dir='.', download=False):
     """
     
     input:
@@ -698,10 +890,20 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
             matplotlib fig handle ( default to None : no plot)
         progress : True show progressbar
         verbose  : False to silent messages
+        store : None, str or list of str
+            search path in str or list of str to get safe path (columns 'path')
+            str is a path string, with optionnal wilcards like `/home/datawork-cersat-public/cache/project/mpc-sentinel1/data/esa/sentinel-${missionid}/L${LEVEL}/${BEAM}/${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}/${year}/${doy}/${SAFE}`,
+            or a simple path like '.' or '/tmp/scihub_download'
+            if list, search in the list until the path is found.
+        download : bool
+            imply get_path. default to False. If True, download safes to `store` (if store is a list, the first index is used)
+        download_wait : bool
+            if `download`, will wait for non online safe to be ready. default to False.
     return :
         a geodataframe with safes from scihub, colocated with input gdf (ie same index)
     """
-
+    global default_user
+    global default_password
     if not verbose:
         logger.setLevel(logging.ERROR)
     if sys.gettrace():
@@ -719,6 +921,10 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
         user = default_user
     if password is None:
         password = default_password
+    # set default user/password
+    default_user = user
+    default_password = password
+
     if cachedir is None:
         cachedir = default_cachedir
     if cacherefreshrecent is None:
@@ -899,6 +1105,7 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
             if min_sea_percent is not None:
                 safes_sea_ok_list.append(safes_sea_ok)
                 safes_sea_nok_list.append(safes_sea_nok)
+    pbar.close()
     safes = pd.concat(safes_list, sort=False)
     safes = safes.sort_values('beginposition')
     if full_fig:
@@ -1002,6 +1209,14 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
         ax.set_position([bbox.x0, bbox.y0, bbox.width, bbox.height * 0.8])
 
         ax.legend(handles=handles, loc='lower center', bbox_to_anchor=(0.5, 1.05), ncol=5)
+
+    if store is not None:
+        # try to find already existing path
+        safes['path'] = safes['filename'].apply(lambda safe: safe_dir(safe, path=store, check_exists=True))
+
+    if download:
+        safes = download_from_df(safes, store=store, zip_dir=zip_dir, progress=progress)
+    #    safes = download_from_df(safes)
 
     return safes
 
