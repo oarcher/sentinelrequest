@@ -52,6 +52,7 @@ except:
 default_user = 'guest'
 default_password = 'guest'
 default_cachedir = None
+default_alt_path = None
 default_cacherefreshrecent = datetime.timedelta(days=7)
 default_timedelta_slice = datetime.timedelta(weeks=1)
 default_filename = 'S1*'
@@ -944,6 +945,8 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
 
     if cachedir is None:
         cachedir = default_cachedir
+    if alt_path is None:
+        alt_path = default_alt_path
     if cacherefreshrecent is None:
         cacherefreshrecent = default_cacherefreshrecent
     if timedelta_slice is None:
