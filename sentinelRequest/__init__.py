@@ -246,13 +246,13 @@ def safe_dir(filename, path='.', only_exists=False):
     filepath = None
     for p in path:
         filepath = string.Template(p).substitute(tags)
-            
+        if not filepath.endswith(filename):
+            filepath = os.path.join(filepath, filename)
         if only_exists:
-            if not filepath.endswith(filename):
-                filepath = os.path.join(filepath, filename)
             if not os.path.exists(filepath):
                 filepath = None
             else:
+                # a path was found. Stop iterating over path list
                 break
     return filepath
 

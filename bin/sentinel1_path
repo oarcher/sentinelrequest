@@ -1,0 +1,23 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+from __future__ import print_function
+import argparse
+import os
+from sentinelRequest import safe_dir
+
+if __name__ == "__main__":
+    default_template = os.getenv('S1DIR_TMPL', "./").split(';')
+    parser = argparse.ArgumentParser(description='Get sentinel1 SAFE path from basename')
+    parser.add_argument('-d', action='append', help="""
+    Path template. 
+    Might be a normal path, or a template like '/home/datawork-cersat-public/cache/project/mpc-sentinel1/data/esa/sentinel-${missionid}/L${LEVEL}/${BEAM}/${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}/${year}/${doy}/${SAFE}' 
+    (do not forget shell quotes). Default to 'S1DIR_TMPL' environment variable.
+    """, default=default_template, required=False)
+    parser.add_argument('-f', action='store_true', help="Return path even if it's doesn't exists", default=False)
+    parser.add_argument('basesafe', help="SAFE name, without path", nargs='+')
+    args = parser.parse_args()
+
+    for b in args.basesafe:
+        p = safe_dir(b, path=args.d, only_exists=not args.f)
+        if p is not None:
+            print(p)
