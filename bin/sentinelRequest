@@ -1,167 +1,192 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from __future__ import print_function
-import os,sys
+import os, sys
 import datetime
 import logging
 import argparse
 
+import warnings
+
 from sentinelRequest import scihubQuery
-from sentinelRequest import  logger,answer_fields
+from sentinelRequest import logger, answer_fields, wget, safe_dir
 import geopandas as gpd
 import shapely.wkt as wkt
 from shapely.geometry import Polygon
+import subprocess
 
-#logging.basicConfig()
-#logger = logging.getLogger(os.path.basename(__file__))
-#logger.setLevel(logging.INFO)
+# logging.basicConfig()
+# logger = logging.getLogger(os.path.basename(__file__))
+# logger.setLevel(logging.INFO)
 
 
 if __name__ == "__main__":
-    dateformat="%Y-%m-%d %H:%M"
-    dtime=3
-    filename="S1*"
-    ddeg=0.1
+    dateformat = "%Y-%m-%d %H:%M"
+    dtime = 3
+    filename = "S1*"
+    ddeg = 0.1
     fionaDrivers = {
-        'csv' : 'CSV',
-        'shp' : 'ESRI Shapefile',
+        'csv': 'CSV',
+        'shp': 'ESRI Shapefile',
         'gpkg': 'GPKG',
-        'kml' : 'KML',
+        'kml': 'KML',
         'json': 'GeoJSON'
-        }
-    
+    }
+
     description = "Requests SAFE list from scihub"
 
-    parser = argparse.ArgumentParser(description = description)
+    parser = argparse.ArgumentParser(description=description)
 
-    parser.add_argument("--user",action="store",default="guest",type=str,help="scihub login")
-    parser.add_argument("--password",action="store",default="guest",type=str,help="scihub password")
-    parser.add_argument("--date",action="append",default=None, nargs=1,  type=str,help="date as string (see --dateformat, or date -d). if provided 2 time, first is start, last is stop")
-    parser.add_argument("--wkt",action="store",default=None, type=str,help="wkt representation of the region of interest")
-    parser.add_argument("--filename",action="store",default=filename,type=str,help="filename, with joker. ex 'S1?_?W_GRD*'. default to %s" % filename)
-    parser.add_argument("--query",action="store",default=None,type=str,help="""additionnal query. for exemple 'orbitdirection:ASCENDING AND polarisationmode:"VV VH"'""")
-    parser.add_argument("--datatake",action="store",default=0,type=int,help="retrieve adjacents datatake (ie adjacent SAFEs). default to 0 (no datatakes)")
-    parser.add_argument("--dateformat",action="store",default=dateformat,  type=str,help="strftime date format. default: %%Y-%%m-%%d %%H:%%M" )
-    parser.add_argument("--dtime",action="store",default=dtime,type=float,help="dtime in hours, if --date has only one date. default to %d" % dtime)
-    #parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
-    #parser.add_argument("--ql",action="store_true",help="download quicklook")
-    parser.add_argument("--cachedir",action="store",default=None,help="cache dir to speedup requests")
-    parser.add_argument("--cacherefreshrecent",action="store",default=7,type=int,help="ignore cache if date is more recent than n days ago")
-    parser.add_argument("--cols",action="store",default="filename",type=str,help="field output, comma separated. for ex --cols=index,filename. An unknown cols will show all available fields. 'index' is a special column name for index")
-    parser.add_argument("--infile",action="store",default=None,type=str,help="infile (ie .csv, .gpkg, .shp ...)")
-    parser.add_argument("--infile_format",action="store",default=None,type=str,help="infile format. default from file ext. see driver option in geopandas.to_file")
-    parser.add_argument("--outfile",action="store",default=None,type=str,help="outfile (ie .csv, .gpkg, .shp ...)")
-    parser.add_argument("--outfile_format",action="store",default=None,type=str,help="outfile format. default from file ext. see driver option in geopandas.to_file")
-    parser.add_argument("--show",action="store_true",help="show map with matplotlib")
-    parser.add_argument("-v", "--verbose", action="count",help="increase output verbosity")
+    parser.add_argument("--user", action="store", default="guest", type=str, help="scihub login")
+    parser.add_argument("--password", action="store", default="guest", type=str, help="scihub password")
+    parser.add_argument("--date", action="append", default=None, nargs=1, type=str,
+                        help="date as string (see --dateformat, or date -d). if provided 2 time, first is start, last is stop")
+    parser.add_argument("--wkt", action="store", default=None, type=str,
+                        help="wkt representation of the region of interest")
+    parser.add_argument("--filename", action="store", default=filename, type=str,
+                        help="filename, with joker. ex 'S1?_?W_GRD*'. default to %s" % filename)
+    parser.add_argument("--query", action="store", default=None, type=str,
+                        help="""additionnal query. for exemple 'orbitdirection:ASCENDING AND polarisationmode:"VV VH"'""")
+    parser.add_argument("--datatake", action="store", default=0, type=int,
+                        help="retrieve adjacents datatake (ie adjacent SAFEs). default to 0 (no datatakes)")
+    parser.add_argument("--dateformat", action="store", default=dateformat, type=str,
+                        help="strftime date format. default: %%Y-%%m-%%d %%H:%%M")
+    parser.add_argument("--dtime", action="store", default=dtime, type=float,
+                        help="dtime in hours, if --date has only one date. default to %d" % dtime)
+    # parser.add_argument("--ddeg", action="store",default=[ddeg],nargs=1,type=float,help="ddeg in deg, if --coord has only one lon,lat. default to %3.2f" % ddeg)
+    # parser.add_argument("--ql",action="store_true",help="download quicklook")
+    parser.add_argument("--cachedir", action="store", default=None, help="cache dir to speedup requests")
+    parser.add_argument("--cacherefreshrecent", action="store", default=7, type=int,
+                        help="ignore cache if date is more recent than n days ago")
+    parser.add_argument("--cols", action="store", default="filename", type=str,
+                        help="field output, comma separated. for ex --cols=index,filename. An unknown cols will show all available fields. 'index' is a special column name for index")
+    parser.add_argument("--infile", action="store", default=None, type=str, help="infile (ie .csv, .gpkg, .shp ...)")
+    parser.add_argument("--infile_format", action="store", default=None, type=str,
+                        help="infile format. default from file ext. see driver option in geopandas.to_file")
+    parser.add_argument("--outfile", action="store", default=None, type=str, help="outfile (ie .csv, .gpkg, .shp ...)")
+    parser.add_argument("--outfile_format", action="store", default=None, type=str,
+                        help="outfile format. default from file ext. see driver option in geopandas.to_file")
+    parser.add_argument("--show", action="store_true", help="show map with matplotlib")
+    parser.add_argument("-v", "--verbose", action="count", help="increase output verbosity")
 
     args = parser.parse_args()
-    
-    #if sys.gettrace():
+
+    # if sys.gettrace():
     #    logger.setLevel(logging.DEBUG)
     #    logger.debug("Activating debug messages")
-    
+
     if args.verbose == 1:
         logger.setLevel(logging.INFO)
     elif args.verbose == 2:
         logger.setLevel(logging.DEBUG)
-    
-    cols=args.cols.split(',')
-    
-    unknown_cols = list(set(cols)-set(answer_fields + ['index']))
+
+    cols = args.cols.split(',')
+
+    unknown_cols = list(set(cols) - set(answer_fields + ['index']))
     if unknown_cols:
         logger.info("Known cols : %s" % (['index'] + answer_fields))
         logger.error("Unknown cols : %s" % unknown_cols)
         sys.exit(1)
-        
+
     if (args.outfile is not None) and ('footprint' not in cols):
-        logger.error('--outfile currently only support GIS format. Please add footprint to cols, ie --cols=%s,footprint' % args.cols)
+        logger.error(
+            '--outfile currently only support GIS format. Please add footprint to cols, ie --cols=%s,footprint' % args.cols)
         sys.exit(1)
     date = None
     if args.date:
         try:
-            date=[ datetime.datetime.strptime(d[0],args.dateformat) for d in args.date]
+            date = [datetime.datetime.strptime(d[0], args.dateformat) for d in args.date]
         except:
             import subprocess
+
             try:
-                date=[ datetime.datetime.utcfromtimestamp(int(subprocess.check_output(['date','-d',d[0],'+%s']))) for d in args.date]
+                date = [datetime.datetime.utcfromtimestamp(int(subprocess.check_output(['date', '-d', d[0], '+%s'])))
+                        for d in args.date]
             except:
-                raise ValueError("Unable to decode '%s' with format '%s' or system command 'date -d'" % (args.date, args.dateformat ))
+                raise ValueError(
+                    "Unable to decode '%s' with format '%s' or system command 'date -d'" % (args.date, args.dateformat))
     if args.wkt:
-        geometry=wkt.loads(args.wkt)
+        geometry = wkt.loads(args.wkt)
     else:
-        geometry=Polygon()
+        geometry = Polygon()
     try:
-        query=args.query
+        query = args.query
     except:
-        query=None
+        query = None
 
     if args.infile:
         # fiona driver
         import fiona
+
         fiona.supported_drivers['KML'] = 'rw'
         if args.infile_format is None:
-            fileext=os.path.splitext(args.infile)[1][1:]
+            fileext = os.path.splitext(args.infile)[1][1:]
             try:
                 args.infile_format = fionaDrivers[fileext]
             except:
                 raise ValueError("unknown ext %s. please use --infile_format" % fileext)
         if args.infile_format not in fiona.supported_drivers:
-            raise ValueError("available infile_format : %s" % (fiona.supported_drivers ))
+            raise ValueError("available infile_format : %s" % (fiona.supported_drivers))
         if args.infile_format == 'CSV':
             import pandas as pd
             import shapely.wkt as wkt
+
             df = pd.read_csv(
                 args.infile, delimiter=";")
-            
+
             df['geometry'] = df['geometry'].apply(wkt.loads)
             if 'startdate' in df:
-                df.rename(columns={'startdate' : 'beginposition'},inplace=True)
+                df.rename(columns={'startdate': 'beginposition'}, inplace=True)
             if 'stopdate' in df:
-                df.rename(columns={'stopdate' : 'endposition'},inplace=True)
+                df.rename(columns={'stopdate': 'endposition'}, inplace=True)
             if date is not None and len(date) == 2:
-                logger.info("Forcing startdate -> stopdate to %s -> %s" % (date[0],date[1]))
+                logger.info("Forcing startdate -> stopdate to %s -> %s" % (date[0], date[1]))
                 df['beginposition'] = date[0]
                 df['endposition'] = date[1]
-            else:    
-                df['beginposition']=df['beginposition'].apply(lambda x: datetime.datetime.strptime(x,args.dateformat))
-                df['endposition']=df['endposition'].apply(lambda x: datetime.datetime.strptime(x,args.dateformat))
+            else:
+                df['beginposition'] = df['beginposition'].apply(
+                    lambda x: datetime.datetime.strptime(x, args.dateformat))
+                df['endposition'] = df['endposition'].apply(lambda x: datetime.datetime.strptime(x, args.dateformat))
             gdf = gpd.GeoDataFrame(
                 df, geometry='geometry',
                 crs={'init': 'epsg:4326'},
             )
             if 'index' in gdf:
-                gdf.set_index('index',inplace=True)
+                gdf.set_index('index', inplace=True)
         else:
-            gdf = gpd.read_file(args.infile,driver=args.infile_format)
-    else:    
+            gdf = gpd.read_file(args.infile, driver=args.infile_format)
+    else:
         if date is None or len(date) == 0:
             gdf = None
-        else:   
+        else:
             gdf = gpd.GeoDataFrame({
-                "beginposition" : date[0],
-                "endposition"   : date[1],
-                "geometry"      : geometry    
-            },index=[0])
-    
+                "beginposition": date[0],
+                "endposition": date[1],
+                "geometry": geometry
+            }, index=[0])
+
     fig = None
     if args.show:
         import matplotlib.pyplot as plt
-        fig = plt.figure(figsize=(10,7))
-    
-    result=scihubQuery(gdf=gdf,dtime=datetime.timedelta(hours=args.dtime),filename=args.filename,query=query,datatake=args.datatake,user=args.user,password=args.password,fig=fig,cachedir=args.cachedir,cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
-    
+
+        fig = plt.figure(figsize=(10, 7))
+
+    result = scihubQuery(gdf=gdf, dtime=datetime.timedelta(hours=args.dtime), filename=args.filename, query=query,
+                         datatake=args.datatake, user=args.user, password=args.password, fig=fig,
+                         cachedir=args.cachedir, cacherefreshrecent=datetime.timedelta(days=args.cacherefreshrecent))
+
     if 'index' in cols:
         result['index'] = result.index
-    
+
     if args.show:
         plt.show()
-    
+
+    all_result = result
     try:
-        result=result[cols]
+        result = result[cols]
     except:
         raise ValueError("bad cols. Available are %s" % result.keys())
-        
+
     if args.outfile:
         # https://github.com/geopandas/geopandas/pull/728 and https://gis.stackexchange.com/questions/281895/changing-shapefiles-field-type-using-fiona/281941#281941
         # need to modify shema for datetime
@@ -170,25 +195,25 @@ if __name__ == "__main__":
             schema['properties']['beginposition'] = 'datetime'
         if 'endposition' in result:
             schema['properties']['endposition'] = 'datetime'
-        
+
         # fiona driver
         import fiona
+
         fiona.supported_drivers['KML'] = 'rw'
         if args.outfile_format is None:
-            fileext=os.path.splitext(args.outfile)[1][1:]
+            fileext = os.path.splitext(args.outfile)[1][1:]
             try:
                 args.outfile_format = fionaDrivers[fileext]
             except:
                 raise ValueError("unknown ext %s. please use --outfile_format" % fileext)
         if args.outfile_format not in fiona.supported_drivers:
-            raise ValueError("available outfile_format : %s" % (fiona.supported_drivers ))
-            
-        result.to_file(args.outfile,driver=args.outfile_format,schema=schema)
-            
-        logger.info("%s dumped as %s" % (args.outfile , args.outfile_format))
+            raise ValueError("available outfile_format : %s" % (fiona.supported_drivers))
+
+        result.to_file(args.outfile, driver=args.outfile_format, schema=schema)
+
+        logger.info("%s dumped as %s" % (args.outfile, args.outfile_format))
     else:
         if not 'index' in cols:
-           result=result.drop_duplicates('filename') 
-        sys.stdout.write(result.to_csv(index=False,sep=';'))
-    
-    
+            result = result.drop_duplicates('filename')
+        sys.stdout.write(result.to_csv(index=False, sep=';'))
+

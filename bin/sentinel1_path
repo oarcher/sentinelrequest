@@ -3,21 +3,55 @@
 from __future__ import print_function
 import argparse
 import os
-from sentinelRequest import safe_dir
+from sentinelRequest import safe_dir, wget, scihubQuery
+import logging
+import warnings
+import subprocess
+logging.basicConfig()
+logger = logging.getLogger(os.path.basename(__file__))
+logger.setLevel(logging.INFO)
 
 if __name__ == "__main__":
     default_template = os.getenv('S1DIR_TMPL', "./").split(';')
-    parser = argparse.ArgumentParser(description='Get sentinel1 SAFE path from basename')
-    parser.add_argument('-d', action='append', help="""
+    parser = argparse.ArgumentParser(description='Get sentinel1 SAFE path from basename (with optional download)')
+    parser.add_argument("--user", action="store", default="guest", type=str, help="scihub login")
+    parser.add_argument("--password", action="store", default="guest", type=str, help="scihub password")
+    parser.add_argument('--path', action='append', help="""
     Path template. 
     Might be a normal path, or a template like '/home/datawork-cersat-public/cache/project/mpc-sentinel1/data/esa/sentinel-${missionid}/L${LEVEL}/${BEAM}/${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}/${year}/${doy}/${SAFE}' 
     (do not forget shell quotes). Default to 'S1DIR_TMPL' environment variable.
     """, default=default_template, required=False)
-    parser.add_argument('-f', action='store_true', help="Return path even if it's doesn't exists", default=False)
+    parser.add_argument('--download', action='store_true', default=False, help="Download SAFE if not found in path")
+    parser.add_argument('--unzip', action='store_true', default=False, help="Unzip SAFE in first writable path found in --path")
     parser.add_argument('basesafe', help="SAFE name, without path", nargs='+')
     args = parser.parse_args()
 
-    for b in args.basesafe:
-        p = safe_dir(b, path=args.d, only_exists=not args.f)
-        if p is not None:
-            print(p)
+    for safe in args.basesafe:
+        safe_path = safe_dir(safe, path=args.path, only_exists=False)
+        if os.path.exists(safe_path):
+            print(safe_path)
+        else:
+            logger.warning("Not found in path : %s" % safe)
+
+            if args.download:
+                zipfile = os.path.join('./', safe + '.zip')
+                if os.path.exists(zipfile):
+                    logger.info('Not overwritting zip: %s' % zipfile)
+                else:
+                    result = scihubQuery(filename=safe, user=args.user, password=args.password)
+                    url = result.iloc[0]['url']
+
+                    logger.info("Download %d/%d : %s" % (args.basesafe.index(safe) + 1, len(args.basesafe), zipfile))
+                    status, outfile = wget(url, zipfile)
+                    logger.debug('status code: %s' % status)
+                if not os.path.exists(zipfile):
+                    warnings.warn('Error while downloading %s' % zipfile)
+                    continue
+                if args.unzip:
+                    dest = os.path.dirname(safe_dir(safe, path=args.path, only_exists=False))
+                    try:
+                        mesg = subprocess.check_output('cd %s ; unzip %s' % (dest, zipfile), shell=True,
+                                                       stderr=subprocess.STDOUT)
+                        logger.info("Unziped : %s" % os.path.join(dest, safe))
+                    except subprocess.CalledProcessError as e:
+                        logger.warning('Unzip error: %s' % os.path.join(zipfile, safe))
