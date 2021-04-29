@@ -19,8 +19,8 @@ from shapely.ops import transform
 import shapely
 import math
 import pyproj
-import geo_shapely as geoshp
-import geopandas_coloc
+from . import geo_shapely as geoshp
+from . import geopandas_coloc
 import warnings
 from tqdm.auto import tqdm
 import pytz
@@ -74,7 +74,7 @@ answer_fields = [u'acquisitiontype', u'beginposition', u'endposition', u'filenam
 dateformat = "%Y-%m-%dT%H:%M:%S.%fZ"
 dateformat_alt = "%Y-%m-%dT%H:%M:%S"
 
-urlapi = 'https://apihub.copernicus.eu/apihub/'
+urlapi = 'https://apihub.copernicus.eu/apihub/search'
 #urlapi = 'https://scihub.copernicus.eu/dhus/search'
 
 # earth as multi poly

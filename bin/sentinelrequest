@@ -8,8 +8,8 @@ import argparse
 
 import warnings
 
-from sentinelRequest import scihubQuery
-from sentinelRequest import logger, answer_fields, wget, safe_dir
+from sentinelrequest import scihubQuery
+from sentinelrequest import logger, answer_fields, wget, safe_dir
 import geopandas as gpd
 import shapely.wkt as wkt
 from shapely.geometry import Polygon
