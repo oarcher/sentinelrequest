@@ -74,8 +74,8 @@ answer_fields = [u'acquisitiontype', u'beginposition', u'endposition', u'filenam
 dateformat = "%Y-%m-%dT%H:%M:%S.%fZ"
 dateformat_alt = "%Y-%m-%dT%H:%M:%S"
 
-# urlapi = 'https://scihub.copernicus.eu/apihub/search'
-urlapi='https://scihub.copernicus.eu/dhus/search'
+urlapi = 'https://apihub.copernicus.eu/apihub/'
+#urlapi = 'https://scihub.copernicus.eu/dhus/search'
 
 # earth as multi poly
 earth = GeometryCollection(list(gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).geometry)).buffer(0)
