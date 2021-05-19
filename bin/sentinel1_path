@@ -31,7 +31,7 @@ if __name__ == "__main__":
         if os.path.exists(safe_path):
             print(safe_path)
         else:
-            logger.warning("Not found in path : %s" % safe)
+            logger.warning("Not found in path : %s" % safe_path)
 
             if args.download:
                 zipfile = os.path.join('./', safe + '.zip')
