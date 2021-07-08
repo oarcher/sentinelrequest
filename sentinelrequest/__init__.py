@@ -1056,6 +1056,8 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
         elapsed_coloc = 0
         if gdf is not None:
             t = time.time()
+            # some buggy safes on scihub have stopdate < startdate : remove them
+            safes_unfiltered = safes_unfiltered[safes_unfiltered['endposition'] - safes_unfiltered['beginposition'] > datetime.timedelta(0)]
             safes = _colocalize(safes_unfiltered, gdf_slice, crs=crs, progress=False)
             elapsed_coloc = time.time() - t
             logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes), elapsed_coloc))
