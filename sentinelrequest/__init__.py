@@ -1040,10 +1040,10 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
         str_query = ' AND '.join(q)
         logger.debug("query: %s" % str_query)
 
-        if len(str_query) > 8000:
-            raise ValueError('to long query (%s > 8000)' % len(str_query))
-
-        # todo : if len(str_query) > 8000 (https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI#Discover_the_products_over_a_pre)
+        if len(str_query) > 8000: # (https://scihub.copernicus.eu/twiki/do/view/SciHubUserGuide/OpenSearchAPI#Discover_the_products_over_a_pre)
+            logger.error("query: %s" % str_query)
+            logger.error('skipping to long query (%s > 8000)' % len(str_query))
+            continue
 
         t = time.time()
         safes_unfiltered, cache_status = scihubQuery_raw(str_query, user=user, password=password, cachedir=cachedir,
