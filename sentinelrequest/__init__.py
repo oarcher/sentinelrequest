@@ -226,10 +226,24 @@ def safe_dir(filename, path='.', only_exists=False):
         path from template
 
     """
-    regex = re.compile(
+    if 'S1' in filename:
+        regex = re.compile(
         "(...)_(..)_(...)(.)_(.)(.)(..)_(........T......)_(........T......)_(......)_(......)_(....).SAFE")
-    template = string.Template(
-        "${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}${POL}_${STARTDATE}_${STOPDATE}_${ORBIT}_${TAKEID}_${PRODID}.SAFE")
+        template = string.Template(
+            "${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}${POL}_${STARTDATE}_${STOPDATE}_${ORBIT}_${TAKEID}_${PRODID}.SAFE")
+    elif 'S2' in filename:
+        # S2B_MSIL1C_20211026T094029_N0301_R036_T33SWU_20211026T115128.SAFE
+        #YYYYMMDDHHMMSS: the datatake sensing start time
+        #Nxxyy: the PDGS Processing Baseline number (e.g. N0204)
+        #ROOO: Relative Orbit number (R001 - R143)
+        #Txxxxx: Tile Number field*
+        # second date if product discriminator
+        regex = re.compile(
+            "(...)_(MSI)(...)_(........T......)_N(....)_R(...)_T(.....)_(........T......).SAFE")
+        template = string.Template(
+        "${MISSIONID}_${PRODUCT}${LEVEL}_${STARTDATE}_${PROCESSINGBL}_${ORBIT}_${TIlE}_${PRODID}.SAFE")
+    else:
+        raise Exception('mission not handle')
     regroups = re.search(regex, filename)
     tags = {}
     for itag, tag in enumerate(re.findall(r"\$\{([\w]+)\}", template.template), start=1):
@@ -567,7 +581,7 @@ def _colocalize(safes, gdf, crs=scihub_crs, coloc=[geopandas_coloc.colocalize_lo
     # initialise an empty index for both gdf
     idx_safes = safes.index.delete(slice(None))
     idx_gdf = gdf.index.delete(slice(None))
-
+    logger.info('========= safes : %s',safes)
     if len(safes) == 0:
         # set same index as gdf, even if empty, to not throw an error on possible merge later 
         safes.index = idx_gdf
@@ -1056,15 +1070,16 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
         elapsed_coloc = 0
         if gdf is not None:
             t = time.time()
-            # some buggy safes on scihub have stopdate < startdate : remove them
-            safes_unfiltered = safes_unfiltered[safes_unfiltered['endposition'] - safes_unfiltered['beginposition'] > datetime.timedelta(0)]
+            if 'filename:S1' in str_query:
+                # some buggy safes on scihub have stopdate < startdate : remove them
+                safes_unfiltered = safes_unfiltered[safes_unfiltered['endposition'] - safes_unfiltered['beginposition'] > datetime.timedelta(0)]
+            logger.info('safes_unfiltered : %s',safes_unfiltered)
             safes = _colocalize(safes_unfiltered, gdf_slice, crs=crs, progress=False)
             elapsed_coloc = time.time() - t
             logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes), elapsed_coloc))
         else:
             # no geometry, so whole earth, and no index from gdf
             safes = safes_unfiltered.copy()
-
         safes_not_colocalized = safes_unfiltered[~safes_unfiltered['filename'].isin(safes['filename'])]
         del safes_unfiltered
 
