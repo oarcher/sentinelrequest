@@ -849,7 +849,7 @@ def normalize_gdf(gdf, startdate=None, stopdate=None, date=None, dtime=None, tim
             nslices = math.ceil((maxdate - mindate) / timedelta_slice)
             if nslices > 1:
                 logger.info("Slicing into %d chunks of %s ..." % (nslices, timedelta_slice))
-            while slice_end <= maxdate:
+            while slice_end < maxdate:
                 islice += 1
                 slice_end = slice_begin + timedelta_slice
                 # this is time grouping
@@ -866,7 +866,7 @@ def normalize_gdf(gdf, startdate=None, stopdate=None, date=None, dtime=None, tim
                     overlap = (earliest_end - latest_start)
                     if overlap >= datetime.timedelta(0):
                         # logger.debug("Slicing time for %s : %s to %s" % (to_expand,latest_start,earliest_end))
-                        gdf_slice = pd.concat([gdf_slice, norm_gdf.loc[to_expand]], ignore_index=True)
+                        gdf_slice = pd.concat([gdf_slice, gpd.GeoDataFrame(norm_gdf.loc[to_expand]).T])
                         gdf_slice.loc[to_expand, 'beginposition'] = latest_start
                         gdf_slice.loc[to_expand, 'endposition'] = earliest_end
                     # else:
