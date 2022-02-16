@@ -91,8 +91,8 @@ def split_east_west(shape):
     shapes_east_list = list(filter(lambda s: not s.is_empty and (s.area > 0 or area == 0), shapes_east_list))
     shapes_west_list = list(filter(lambda s: not s.is_empty and (s.area > 0 or area == 0), shapes_west_list))
 
-    shape_east = ops.cascaded_union(shapes_east_list)
-    shape_west = ops.cascaded_union(shapes_west_list)
+    shape_east = ops.unary_union(shapes_east_list)
+    shape_west = ops.unary_union(shapes_west_list)
 
     return shape_east, shape_west
 

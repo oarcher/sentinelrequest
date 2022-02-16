@@ -554,7 +554,7 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
                     logger.debug("To recent answer. Removing cachefile %s" % xml_cachefile)
                     os.unlink(xml_cachefile)
             # sort by sensing date
-            safes = safes.append(chunk_safes, ignore_index=True, sort=False)
+            safes = pd.concat([safes, chunk_safes], ignore_index=True, sort=False)
             safes = safes.sort_values('beginposition')
             safes.reset_index(drop=True, inplace=True)
             safes = safes.set_geometry('footprint')
@@ -849,7 +849,7 @@ def normalize_gdf(gdf, startdate=None, stopdate=None, date=None, dtime=None, tim
             nslices = math.ceil((maxdate - mindate) / timedelta_slice)
             if nslices > 1:
                 logger.info("Slicing into %d chunks of %s ..." % (nslices, timedelta_slice))
-            while slice_end <= maxdate:
+            while slice_end < maxdate:
                 islice += 1
                 slice_end = slice_begin + timedelta_slice
                 # this is time grouping
@@ -866,7 +866,7 @@ def normalize_gdf(gdf, startdate=None, stopdate=None, date=None, dtime=None, tim
                     overlap = (earliest_end - latest_start)
                     if overlap >= datetime.timedelta(0):
                         # logger.debug("Slicing time for %s : %s to %s" % (to_expand,latest_start,earliest_end))
-                        gdf_slice = gdf_slice.append(norm_gdf.loc[to_expand])
+                        gdf_slice = pd.concat([gdf_slice, gpd.GeoDataFrame(norm_gdf.loc[to_expand]).T])
                         gdf_slice.loc[to_expand, 'beginposition'] = latest_start
                         gdf_slice.loc[to_expand, 'endposition'] = earliest_end
                     # else:
@@ -1024,9 +1024,9 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
         shape_west = Polygon()
 
         if shape_east_list:
-            shape_east = ops.cascaded_union(gdf_slice['scihub_geometry_east_list']).buffer(2).simplify(1.9)
+            shape_east = ops.unary_union(gdf_slice['scihub_geometry_east_list']).buffer(2).simplify(1.9)
         if shape_west_list:
-            shape_west = ops.cascaded_union(gdf_slice['scihub_geometry_west_list']).buffer(2).simplify(1.9)
+            shape_west = ops.unary_union(gdf_slice['scihub_geometry_west_list']).buffer(2).simplify(1.9)
 
         wkt_shapes = []
 
