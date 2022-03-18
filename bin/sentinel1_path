@@ -18,7 +18,7 @@ if __name__ == "__main__":
     parser.add_argument("--password", action="store", default="guest", type=str, help="scihub password")
     parser.add_argument('--path', action='append', help="""
     Path template. 
-    Might be a normal path, or a template like '/home/datawork-cersat-public/cache/project/mpc-sentinel1/data/esa/sentinel-${missionid}/L${LEVEL}/${BEAM}/${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}/${year}/${doy}/${SAFE}' 
+    Might be a normal path, or a template like '/home/datawork-cersat-public/cache/project/mpc-sentinel1/data/esa/${longmissionid}/L${LEVEL}/${BEAM}/${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}/${year}/${doy}/${SAFE}' 
     (do not forget shell quotes). Default to 'S1DIR_TMPL' environment variable.
     """, default=default_template, required=False)
     parser.add_argument('--download', action='store_true', default=False, help="Download SAFE if not found in path")
