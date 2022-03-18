@@ -220,15 +220,28 @@ def safe_dir(filename, path='.', only_exists=False):
         if True and path doesn't exists, return None.
         if False, return last path found
 
+    Examples
+    --------
+    For datarmor at ifremer, path template should be:
+
+    '/home/datawork-cersat-public/cache/project/mpc-sentinel1/data/esa/${longmissionid}/L${LEVEL}/${BEAM}/${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}/${year}/${doy}/${SAFE}'
+
+    For creodias, it should be:
+
+    '/eodata/Sentinel-1/SAR/${PRODUCT}/${year}/${month}/${day}/${SAFE}'
+
     Returns
     -------
     str
         path from template
 
     """
+
+    # this function is shared between sentinelrequest and xsar
+
     if 'S1' in filename:
         regex = re.compile(
-        "(...)_(..)_(...)(.)_(.)(.)(..)_(........T......)_(........T......)_(......)_(......)_(....).SAFE")
+            "(...)_(..)_(...)(.)_(.)(.)(..)_(........T......)_(........T......)_(......)_(......)_(....).SAFE")
         template = string.Template(
             "${MISSIONID}_${BEAM}_${PRODUCT}${RESOLUTION}_${LEVEL}${CLASS}${POL}_${STARTDATE}_${STOPDATE}_${ORBIT}_${TAKEID}_${PRODID}.SAFE")
     elif 'S2' in filename:
@@ -241,7 +254,7 @@ def safe_dir(filename, path='.', only_exists=False):
         regex = re.compile(
             "(...)_(MSI)(...)_(........T......)_N(....)_R(...)_T(.....)_(........T......).SAFE")
         template = string.Template(
-        "${MISSIONID}_${PRODUCT}${LEVEL}_${STARTDATE}_${PROCESSINGBL}_${ORBIT}_${TIlE}_${PRODID}.SAFE")
+            "${MISSIONID}_${PRODUCT}${LEVEL}_${STARTDATE}_${PROCESSINGBL}_${ORBIT}_${TIlE}_${PRODID}.SAFE")
     else:
         raise Exception('mission not handle')
     regroups = re.search(regex, filename)
@@ -252,18 +265,24 @@ def safe_dir(filename, path='.', only_exists=False):
     startdate = datetime.datetime.strptime(
         tags["STARTDATE"], '%Y%m%dT%H%M%S').replace(tzinfo=pytz.UTC)
     tags['SAFE'] = regroups.group(0)
-    tags["missionid"] = tags["MISSIONID"][1:3].lower()
+    tags["missionid"] = tags["MISSIONID"][1:3].lower() # should be replaced by tags["MISSIONID"].lower()
+    tags["longmissionid"] = 'sentinel-%s' % tags["MISSIONID"][1:3].lower()
     tags["year"] = startdate.strftime("%Y")
+    tags["month"] = startdate.strftime("%m")
+    tags["day"] = startdate.strftime("%d")
     tags["doy"] = startdate.strftime("%j")
     if isinstance(path, str):
         path = [path]
     filepath = None
     for p in path:
+        # deprecation warnings (see https://github.com/oarcher/sentinelrequest/issues/4)
+        if '{missionid}' in p:
+            warnings.warn('{missionid} tag is deprecated. Update your path template to use {longmissionid}')
         filepath = string.Template(p).substitute(tags)
         if not filepath.endswith(filename):
             filepath = os.path.join(filepath, filename)
         if only_exists:
-            if not os.path.exists(filepath):
+            if not os.path.isfile(os.path.join(filepath,'manifest.safe')):
                 filepath = None
             else:
                 # a path was found. Stop iterating over path list
