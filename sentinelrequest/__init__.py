@@ -552,9 +552,13 @@ def scihubQuery_raw(str_query, user=None, password=None, cachedir=None, cacheref
                         values = []
                         logger.debug("Ignoring field %s (not found)." % field)
                 if len(values) >= 1:
-                    chunk_safes_df[field] = values
-                    if tag in decode_tags:
-                        chunk_safes_df[field] = chunk_safes_df[field].apply(decode_tags[tag])
+                    try:
+                        chunk_safes_df[field] = values
+                        if tag in decode_tags:
+                            chunk_safes_df[field] = chunk_safes_df[field].apply(decode_tags[tag])
+                    except:
+                        print('impossible to get field: %s because number of values is not coherent with the other fields.'%field)
+
             try:
                 shp_footprints = chunk_safes_df['footprint'].apply(wkt.loads)
             except:
@@ -600,7 +604,7 @@ def _colocalize(safes, gdf, crs=scihub_crs, coloc=[geopandas_coloc.colocalize_lo
     # initialise an empty index for both gdf
     idx_safes = safes.index.delete(slice(None))
     idx_gdf = gdf.index.delete(slice(None))
-    logger.info('========= safes : %s',safes)
+    logger.debug('========= safes : %s',safes)
     if len(safes) == 0:
         # set same index as gdf, even if empty, to not throw an error on possible merge later 
         safes.index = idx_gdf
@@ -867,7 +871,7 @@ def normalize_gdf(gdf, startdate=None, stopdate=None, date=None, dtime=None, tim
             islice = 0
             nslices = math.ceil((maxdate - mindate) / timedelta_slice)
             if nslices > 1:
-                logger.info("Slicing into %d chunks of %s ..." % (nslices, timedelta_slice))
+                logger.debug("Slicing into %d chunks of %s ..." % (nslices, timedelta_slice))
             while slice_end < maxdate:
                 islice += 1
                 slice_end = slice_begin + timedelta_slice
@@ -1092,7 +1096,7 @@ def scihubQuery(gdf=None, startdate=None, stopdate=None, date=None, dtime=None, 
             if 'filename:S1' in str_query:
                 # some buggy safes on scihub have stopdate < startdate : remove them
                 safes_unfiltered = safes_unfiltered[safes_unfiltered['endposition'] - safes_unfiltered['beginposition'] > datetime.timedelta(0)]
-            logger.info('safes_unfiltered : %s',safes_unfiltered)
+            logger.debug('safes_unfiltered : %s',safes_unfiltered)
             safes = _colocalize(safes_unfiltered, gdf_slice, crs=crs, progress=False)
             elapsed_coloc = time.time() - t
             logger.debug("colocated with user query : %s SAFES in %.1f secs" % (len(safes), elapsed_coloc))
